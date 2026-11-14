@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { installApi, wizardIntent, type InstallRequest, type StepId, type UpdateCheck, type UpdatePreview } from "../api";
 import { useApp } from "../ctx";
 import { IconRefresh } from "../icons";
-import { approx, useW } from "./texts";
+import { approx, gb, useW } from "./texts";
 import { minutes, updateClass, updateWhy } from "./wait";
 
 type W = ReturnType<typeof useW>["w"];
@@ -88,6 +88,28 @@ async function requestFor(dir: string): Promise<InstallRequest> {
   return { ...info.request, install_dir: dir, allow_prereqs: false, force_rebuild: false };
 }
 
+/** Play page, for an install made for the previous game version: the game update is needed, said plainly (what it asks
+ *  for, what it keeps, what it deletes, what still works meanwhile). One button opens the wizard on that install. */
+function GameVersionNeeded({ check }: { check: UpdateCheck }) {
+  const { w } = useW();
+  const { go } = useApp();
+  const v = { from: check.game_from ?? "", to: check.game_to };
+  return (
+    <div className="upd-line upd-full" role="status">
+      <IconRefresh className="upd-ico" />
+      <div className="grow upd-text">
+        <p className="upd-title">{w("ver.title", v)}</p>
+        <p className="small">{w("ver.text", v)}</p>
+        <p className="small muted">{w("ver.keep", { ...v, need: gb(check.disk_need), freed: gb(check.old_bytes) })}</p>
+        <p className="small muted">{w("ver.files", { ...v, t: approx(check.eta) })}</p>
+      </div>
+      <div className="upd-actions">
+        <button className="btn btn-small" onClick={() => startUpdate(check.install_dir, go)}>{w("ver.go", v)}</button>
+      </div>
+    </div>
+  );
+}
+
 /** Play page: "Game update available", its truth, and when to run it. */
 export function GameUpdateNotice() {
   const { w } = useW();
@@ -96,6 +118,7 @@ export function GameUpdateNotice() {
   const [, setTick] = useState(0);
   const [scheduled, setScheduled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
+  if (check?.available && check.game_from) return <GameVersionNeeded check={check} />;
   if (!check?.available || !check.update || putOff.has(check.bundled_commit)) return null;
   const cls = updateClass(check.update, check.eta);
   const atClose = scheduled ?? check.at_close;

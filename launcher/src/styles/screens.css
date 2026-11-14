@@ -462,6 +462,26 @@
 .two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
 .wordlist { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
 .field-note { border: 1px solid rgba(255, 96, 116, 0.55); border-radius: var(--r-md); background: var(--red-soft); padding: var(--sp-2) var(--sp-3); margin: var(--sp-2) 0; }
+/* Sub-abilities of the worn piece (Locker, Gear tab) */
+.subs { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-lg); background: rgba(6, 4, 26, 0.35); }
+.subs-off { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; color: var(--text-2); font-size: var(--fs-sm); }
+.subs-title { font-size: var(--fs-md, 1rem); font-weight: 750; margin: 0; }
+.subs-slots { display: grid; grid-template-columns: repeat(3, minmax(0, 14rem)); gap: var(--sp-2); }
+.sub-slot, .sub-opt {
+  display: flex; align-items: center; gap: var(--sp-2); min-height: 3rem; padding: 0.35rem 0.6rem; text-align: left; cursor: pointer;
+  background: rgba(255, 255, 255, 0.04); color: var(--text-2); border: 1px solid var(--line); border-radius: var(--r-md); font-weight: 650; font-size: 0.85rem;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.sub-slot:hover, .sub-opt:hover { background: var(--surface-2); border-color: var(--line-strong); color: var(--text); }
+.sub-slot-on, .sub-opt-on { color: var(--text); box-shadow: 0 0 0 2px var(--lemon); }
+.sub-slot:focus-visible, .sub-opt:focus-visible { outline: none; box-shadow: var(--focus); }
+.sub-icon { width: 32px; height: 32px; flex: none; }
+.sub-icon-empty { display: block; border: 1px dashed var(--line-strong); border-radius: 50%; }
+.sub-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr)); gap: var(--sp-2); }
+.subs-fill { margin: 0 0 var(--sp-3); }
+.opt-hint { margin: 0 0 0 1.7rem; font-weight: 400; }
+@media (max-width: 760px) { .subs-slots { grid-template-columns: 1fr; } }
 
 .vg { position: relative; overflow-y: auto; overflow-x: hidden; background: rgba(6, 4, 26, 0.5); border: 1px solid var(--line); border-radius: var(--r-lg); }
 .vg-fill { height: calc(100vh - 21rem); min-height: 20rem; }
