@@ -19,9 +19,11 @@
 //   &iwarn=outside_profile,ram_low (warnings of a running install's checks)
 //   &relays=1 (1.1.9: several relays; the Account tab shows their measurement in every state, ending after 3 s)
 //   &stages=none (no game data: no stage pictures or names, the cards are neutral and the room form has its list)
-//   &lup=uptodate|never|available|beta|downloading|ready|blocked|installer|elsewhere|readonly|saved|error|integrity|
-//        untrusted|rate|updated|rolledback|restarting (the launcher's own update; absent: a build without an update
-//        repository, nothing shown)
+//   &lup=uptodate|never|available|beta|downloading|ready|blocked|relay|installer|elsewhere|readonly|saved|error|integrity|
+//        untrusted|rate|updated|rolledback|restarting|later (the launcher's own update; absent: a build without an update
+//        repository, nothing shown; "later": put off, the bar is hidden and the Settings entry has its dot)
+//        &dlg=0 (the dialog that asks once at the start was already answered: the bar alone; without it, the dialog
+//        opens 1.5 s after the page is up and idle)
 //   while it compiles: &ist=early|merge|compile|link|waitgame (how far a running install is: before the merge, the merge
 //        beside the lift (default), the compile with the game data ready, an update putting the new executable in
 //        place, an update waiting for the game to be closed)   &iupd=1 (the running install is an update of a playable
@@ -33,6 +35,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import schemaJson from "../../../src-tauri/resources/settings-schema.json";
 import { emit } from "./event";
+import { markDialogDone } from "../../update/prompt";
 import { MOCK_SUB_ABILITIES, STAGE_IDS, catalogue, stagesView } from "./catalogue";
 import { mockDraft, mockDraftAct, mockDraftMatch } from "./draft";
 import { META_STANDS, OLD_REFUSAL, ROOM_FIELDS, ROOM_STANDS, standsDraft, standsMatch, standsRoom, standsRunner, watchable } from "./stands";
@@ -525,6 +528,7 @@ const LUP_NOTES = [
   "- Details: https://github.com/owner/kalamar/issues/12 (a link is never clickable here)",
 ].join("\n");
 const lupKind = S.lup;
+if (q.get("dlg") === "0") markDialogDone();
 const lup: any = (() => {
   const k = lupKind;
   const on = k !== null && k !== "off";
@@ -535,11 +539,11 @@ const lup: any = (() => {
     last_check: k === "never" ? null : now() - 3 * 3600, checking: false,
     check_error: k === "error" ? "network" : k === "untrusted" ? "untrusted" : k === "rate" ? "rate_limited" : null,
     available: offered ? { version: k === "beta" ? "0.3.0-beta.1" : "0.2.0", channel: k === "beta" ? "beta" : "stable", notes: LUP_NOTES, published: "2026-11-12T10:00:00Z", size: mode === "installer" ? 39_800_000 : 41_900_000, mode, why: k === "readonly" ? "readonly" : mode === "elsewhere" ? "temp" : null } : null,
-    later: false,
-    phase: k === "downloading" ? "downloading" : ["ready", "blocked", "installer", "elsewhere", "readonly", "rolledback"].includes(k!) ? "ready" : k === "saved" ? "saved" : k === "restarting" ? "restarting" : "idle",
+    later: k === "later",
+    phase: k === "downloading" ? "downloading" : ["ready", "blocked", "relay", "installer", "elsewhere", "readonly", "rolledback"].includes(k!) ? "ready" : k === "saved" ? "saved" : k === "restarting" ? "restarting" : "idle",
     progress: k === "downloading" ? { done: 17_600_000, total: 41_900_000 } : null,
     error: k === "integrity" ? "integrity" : null,
-    blocked: k === "blocked" ? "game" : null,
+    blocked: k === "blocked" ? "game" : k === "relay" ? "relay" : null,
     saved_to: k === "saved" ? "D:\\Games\\Kalamar\\Kalamar.exe" : null,
     notice: k === "updated" ? { kind: "updated", from: "0.1.0", to: "0.2.0" } : k === "rolledback" ? { kind: "rolled_back", from: "0.1.0", to: "0.2.0" } : null,
   };

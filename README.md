@@ -17,7 +17,7 @@ It currently supports *Splatoon 3*, version 11.3.0.
 > - **No original online service is contacted.** The game never talks to the publisher's servers. Without a
 >   community server added by you, the launcher makes no network access, apart from the build tools its install
 >   wizard downloads after listing them and asking you, and, in published releases, the check for its own updates
->   on GitHub (at most once a day, can be turned off; no personal data sent, GitHub sees the IP address; nothing is
+>   on GitHub (at each start and every 6 hours while it stays open, can be turned off; no personal data sent, GitHub sees the IP address; nothing is
 >   installed without your consent).
 > - **Discord presence is off by default.** Switched on (Settings › Discord), the launcher tells the Discord app of
 >   your PC, through its local channel, what you are doing at the level you chose, and Discord shows it to your
