@@ -4,12 +4,12 @@
 lets you play it offline with keyboard, mouse or gamepad. Multiplayer exists only if you choose to add a community
 server, and anyone can run one or write their own from the open documentation.
 
-It currently supports *Splatoon 3*, version 11.2.0.
+It currently supports *Splatoon 3*, version 11.3.0.
 
 > [!IMPORTANT]
 > **What this is not.**
 > - **No game files are included.** No code, data, images, sounds, fonts or keys of the game are in this repository
->   or in the launcher. You need to own the game and the console, and your own copy of the game and of its 11.2.0
+>   or in the launcher. You need to own the game and the console, and your own copy of the game and of its 11.3.0
 >   update, dumped from your own console, with your console's keys. How to obtain them is not explained here, and
 >   no help is given for it.
 > - **Not a way to get the game.** The build happens on your machine, from your files; the result contains the game
@@ -80,7 +80,7 @@ What the launcher does about each, and the other remaining risks:
 ## Quick start
 
 **Players.** No release is published yet: build the launcher from source (below), start it, and let its install
-wizard ask for your three files (the game, its 11.2.0 update, your console's keys file) and build the game. Then
+wizard ask for your three files (the game, its 11.3.0 update, your console's keys file) and build the game. Then
 press **Play**. Step by step: [docs/getting-started.md](docs/getting-started.md).
 
 **Developers.** On Windows with Node.js 24, Rust (stable, MSVC) and Python 3:

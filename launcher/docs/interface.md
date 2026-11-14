@@ -28,6 +28,15 @@ The **advanced mode** (Settings > Advanced mode, `ui.advanced` in `config.json`)
 
 The rail holds Play, Locker, Community (only once a server is added) and Settings, and the player card.
 
+### Locker
+
+Tabs for the character, gear, weapon and splashtag, a side card with the name and the "At launch" options. Under the
+chosen piece of the Gear tab, three slot buttons show its sub-abilities (icon and name, or "Empty"); a slot opens a
+picker with every ability a sub slot can hold, "Empty" and the "Fill all three with this ability" shortcut, and "Clear"
+empties the three. The editor and the "Full stock of ability chunks" option appear only when the installed game applies
+them, else one line asks for the game update ([game-data.md](game-data.md), "Sub-abilities and ability chunks").
+`npm run dev:mock` shows it (`?gear=old`: the update line, `?gear=none`: nothing).
+
 ### Play
 
 One main block: the state in one sentence and one button (Install, Play, or Back to the game + Stop; a game update
