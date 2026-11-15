@@ -15,6 +15,7 @@
 #include "flight.h"
 #include "gfx.h"
 #include "host.h"
+#include "input_first.h"
 #include "mgyro_bench.h"
 #include "nvn_api.h"
 #include "nvn_hmap.h"
@@ -710,19 +711,39 @@ static struct {
 
 static int late_input(void) { return low_latency() && cfg_bool("TOTK_LATE_INPUT") && !cfg_bool("TOTK_FRAME_QUEUE"); }
 
-// At a present held to slot.
-static void li_present(uint64_t now, uint64_t slot, uint64_t period) {
+// With input first (input_first.c) the frame reads the controllers at the start of its calc, just after its draw handed
+// the previous frame to the present thread and usually before that frame's present: the read belongs to the present
+// after it, not to the next one. The frame function's draws are counted (nvn_frame_drawn, before the frame's reads, on
+// the main thread) and so are the presents: the frame's first state read after a draw is its gate, the newest draw is
+// still to be presented when no present came since it, and a present's work runs from the gate before the draw it
+// presents. Under li.lock.
+static struct {
+    uint64_t draws, presents;   // draws counted, presents (all)
+    uint64_t draw_presents;     // presents when the newest draw was counted
+    uint64_t draw_read;         // the pass time of the gate before the newest draw, 0: no read since the draw before
+    uint64_t gate_draws;        // draws when the newest gate opened: one gate per draw
+    uint64_t pass;              // when the newest gate let its read go, 0 while it waits
+} fd;
+
+static int first_mode(void) { return late_input() && input_first_active() && __atomic_load_n(&fd.draws, __ATOMIC_RELAXED); }
+
+void nvn_frame_drawn(void) {
     plat_mutex_lock(&li.lock);
-    int on = late_input() && li.gates > li.presents;
-    if (!on) {
-        li.gates = li.presents = 0;
-        li.passed[0] = li.passed[1] = 0;
-        li.slot = 0;
-        __atomic_store_n(&li.live, 0, __ATOMIC_RELEASE);
-        plat_mutex_unlock(&li.lock);
-        return;
-    }
-    uint64_t passed = li.passed[li.presents & 1];
+    fd.draw_read = fd.gate_draws == fd.draws ? fd.pass : 0;
+    fd.draw_presents = fd.presents;
+    __atomic_store_n(&fd.draws, fd.draws + 1, __ATOMIC_RELAXED);
+    plat_mutex_unlock(&li.lock);
+}
+
+static void li_reset(void) {
+    li.gates = li.presents = 0;
+    li.passed[0] = li.passed[1] = 0;
+    li.slot = 0;
+    __atomic_store_n(&li.live, 0, __ATOMIC_RELEASE);
+}
+
+// The lead from a frame's measured work: the largest of the last LL_FRAMES plus a margin, at most a period.
+static void li_lead(uint64_t now, uint64_t passed, uint64_t slot, uint64_t period) {
     if (!li.slot) {
         // the first frame with a state read was still paced by the acquire: its time says nothing. Half a period to
         // start with, replaced by measured frames within LL_FRAMES presents.
@@ -737,6 +758,60 @@ static void li_present(uint64_t now, uint64_t slot, uint64_t period) {
     lead += LL_MARGIN_NS;
     li.lead = lead > period ? period : lead;
     li.slot = slot, li.period = period;
+}
+
+// At a present held to slot, with input first: the present of the newest draw carries the read of the gate before it.
+static void first_present(uint64_t now, uint64_t slot, uint64_t period) {
+    uint64_t read = fd.presents == fd.draw_presents + 1 ? fd.draw_read : 0;
+    li.gates = li.presents = 0;   // the other accounting starts over if input first is switched off
+    if (!read) {
+        li_reset();
+        return;
+    }
+    li_lead(now, read, slot, period);
+    __atomic_store_n(&li.live, 1, __ATOMIC_RELEASE);
+}
+
+// The gate with input first: the first state read after a draw waits until the slot after the newest draw's present,
+// or after the one that follows when that present is still to come, minus the lead.
+static void first_gate(void) {
+    plat_mutex_lock(&li.lock);
+    if (fd.gate_draws == fd.draws) {   // the frame's later reads
+        plat_mutex_unlock(&li.lock);
+        return;
+    }
+    uint64_t draws = fd.gate_draws = fd.draws;
+    fd.pass = 0;
+    uint64_t pending = fd.presents == fd.draw_presents, now = kern_now_ns();
+    uint64_t at = li.slot ? li.slot + (1 + pending) * li.period - li.lead : 0;
+    plat_mutex_unlock(&li.lock);
+    if (at > now && at - now < 100000000ull) {
+        uint64_t p0 = perf_begin();
+        sleep_until(at);
+        perf_end(PERF_PACE, p0);
+        now = kern_now_ns();
+    }
+    plat_mutex_lock(&li.lock);
+    if (fd.gate_draws == draws) fd.pass = now;
+    plat_mutex_unlock(&li.lock);
+}
+
+// At a present held to slot.
+static void li_present(uint64_t now, uint64_t slot, uint64_t period) {
+    plat_mutex_lock(&li.lock);
+    __atomic_store_n(&fd.presents, fd.presents + 1, __ATOMIC_RELAXED);
+    if (first_mode()) {
+        first_present(now, slot, period);
+        plat_mutex_unlock(&li.lock);
+        return;
+    }
+    int on = late_input() && li.gates > li.presents;
+    if (!on) {
+        li_reset();
+        plat_mutex_unlock(&li.lock);
+        return;
+    }
+    li_lead(now, li.passed[li.presents & 1], slot, period);
     li.presents++;
     if (li.gates > li.presents + 1) li.gates = li.presents + 1;   // never more than one frame ahead
     __atomic_store_n(&li.live, 1, __ATOMIC_RELEASE);
@@ -746,6 +821,10 @@ static void li_present(uint64_t now, uint64_t slot, uint64_t period) {
 // ov_input.c, before a controller or six-axis state is read: the first read of a frame waits for the frame's gate.
 void nvn_input_gate(void) {
     if (!ll.w || !late_input()) return;
+    if (first_mode()) {
+        first_gate();
+        return;
+    }
     plat_mutex_lock(&li.lock);
     uint64_t now = kern_now_ns(), ahead = li.gates - li.presents, last = li.passed[(li.gates - 1) & 1];
     // the frame's later reads: its gate is open (or another thread still waits at it), or this frame is not presented

@@ -1,16 +1,16 @@
 //! Loadout presets: named snapshots of the outfit and weapon (`head`, `clothes`, `shoes`, `weapon` and the chosen sub
-//! abilities) that the Locker can apply to the profile in one click. Appearance, name and splashtag are not part of a
+//! and main abilities) that the Locker can apply to the profile in one click. Appearance, name and splashtag are not part of a
 //! preset.
 //!
 //! The presets live in `loadouts.json` beside `profile.json` in the launcher data directory:
 //! `{ "schema": 1, "presets": [ { "name": "Ranked", "head": 1000, "clothes": 8031, "shoes": 4024, "weapon": 10,
-//! "sub_abilities": { "head": ["NameA", null, null] } } ] }`. A missing, oversized or damaged file means "no presets":
+//! "sub_abilities": { "head": ["NameA", null, null] }, "main_abilities": { "head": "NameB" } } ] }`. A missing, oversized or damaged file means "no presets":
 //! it never blocks the Locker. Applying a preset is done by the frontend (it copies the five fields into the profile
 //! being edited, which then goes through `profile_save`), so nothing here touches `profile.json`.
 
 use crate::error::{AppError, AppResult, FieldError};
 use crate::game::catalogue::Catalogue;
-use crate::profile::{self, Profile, SubAbilities};
+use crate::profile::{self, MainAbilities, Profile, SubAbilities};
 use crate::util;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -28,6 +28,8 @@ pub struct Loadout {
     pub shoes: Option<i64>,
     pub weapon: Option<i64>,
     pub sub_abilities: SubAbilities,
+    /// Added without a new schema number: a preset saved before it loads with no main ability chosen.
+    pub main_abilities: MainAbilities,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -101,12 +103,21 @@ fn store(data_dir: &Path, presets: &[Preset]) -> AppResult<()> {
     util::atomic_write(&loadouts_path(data_dir), text.as_bytes())
 }
 
-/// Checks a loadout's ids and sub-ability names against the catalogue exactly as a profile is checked (by validating a
+/// Checks a loadout's ids and ability names against the catalogue exactly as a profile is checked (by validating a
 /// profile that carries only these fields), and returns the cleaned loadout.
-pub fn validate_loadout(l: &Loadout, cat: &Catalogue, sub_capable: Option<&[String]>) -> AppResult<Loadout> {
-    let probe = Profile { name: "preset".into(), head: l.head, clothes: l.clothes, shoes: l.shoes, weapon: l.weapon, sub_abilities: l.sub_abilities.clone(), ..Default::default() };
-    let clean = profile::validate_profile(&probe, cat, sub_capable)?;
-    Ok(Loadout { head: clean.head, clothes: clean.clothes, shoes: clean.shoes, weapon: clean.weapon, sub_abilities: clean.sub_abilities })
+pub fn validate_loadout(l: &Loadout, cat: &Catalogue, sub_capable: Option<&[String]>, main_capable: Option<&[String]>) -> AppResult<Loadout> {
+    let probe = Profile {
+        name: "preset".into(),
+        head: l.head,
+        clothes: l.clothes,
+        shoes: l.shoes,
+        weapon: l.weapon,
+        sub_abilities: l.sub_abilities.clone(),
+        main_abilities: l.main_abilities.clone(),
+        ..Default::default()
+    };
+    let clean = profile::validate_profile(&probe, cat, sub_capable, main_capable)?;
+    Ok(Loadout { head: clean.head, clothes: clean.clothes, shoes: clean.shoes, weapon: clean.weapon, sub_abilities: clean.sub_abilities, main_abilities: clean.main_abilities })
 }
 
 /// Adds a preset, or replaces the one with the same name (case-insensitive; it keeps its position and takes the new
@@ -189,7 +200,7 @@ mod tests {
         assert!(validate_name("   ").is_err());
         assert!(validate_name(&"a".repeat(24)).is_ok());
         assert!(validate_name(&"a".repeat(25)).is_err());
-        assert!(validate_name(&"é".repeat(24)).is_ok()); // characters, not bytes
+        assert!(validate_name(&"\u{e9}".repeat(24)).is_ok()); // characters, not bytes
         assert!(validate_name("a\u{202E}b").is_err());
         assert!(validate_name("<b>").is_err());
     }
@@ -256,10 +267,28 @@ mod tests {
         cat.categories.insert("head".into(), vec![Entry { id: 1000, selectable: true, ..Default::default() }]);
         cat.categories.insert("weapon".into(), vec![Entry { id: 10, selectable: true, ..Default::default() }]);
         let ok = Loadout { head: Some(1000), weapon: Some(10), sub_abilities: SubAbilities { head: Some(vec![None, None, None]), ..Default::default() }, ..Default::default() };
-        assert_eq!(validate_loadout(&ok, &cat, None).unwrap(), ok);
+        assert_eq!(validate_loadout(&ok, &cat, None, None).unwrap(), ok);
         let bad = Loadout { head: Some(7), ..ok.clone() };
-        assert!(matches!(validate_loadout(&bad, &cat, None), Err(AppError::Validation(_))));
+        assert!(matches!(validate_loadout(&bad, &cat, None, None), Err(AppError::Validation(_))));
         let bad_subs = Loadout { sub_abilities: SubAbilities { head: Some(vec![None]), ..Default::default() }, ..ok };
-        assert!(validate_loadout(&bad_subs, &cat, None).is_err());
+        assert!(validate_loadout(&bad_subs, &cat, None, None).is_err());
+    }
+
+    #[test]
+    fn a_preset_keeps_its_main_abilities_and_they_are_checked() {
+        let mut cat = neutral();
+        cat.categories.insert("head".into(), vec![Entry { id: 1000, selectable: true, ability: Some("Alpha".into()), ..Default::default() }, Entry { id: 1001, selectable: true, ability: Some("Beta".into()), ..Default::default() }]);
+        let set = vec!["Alpha".to_string(), "Beta".to_string(), "Gamma".to_string()];
+        let ok = Loadout { head: Some(1000), main_abilities: MainAbilities { head: Some("Beta".into()), ..Default::default() }, ..Default::default() };
+        assert_eq!(validate_loadout(&ok, &cat, None, Some(&set)).unwrap(), ok);
+        let bad = Loadout { main_abilities: MainAbilities { head: Some("Gamma".into()), ..Default::default() }, ..ok.clone() };
+        assert!(validate_loadout(&bad, &cat, None, Some(&set)).is_err(), "no head piece has it as its main ability");
+        // stored and read back; a preset written before the member loads with none chosen
+        let d = tmp("main");
+        save_preset(&d, "Main", ok.clone()).unwrap();
+        assert_eq!(load(&d)[0].loadout.main_abilities.head.as_deref(), Some("Beta"));
+        std::fs::write(loadouts_path(&d), r#"{"schema":1,"presets":[{"name":"Old","head":1000,"sub_abilities":{"head":["Alpha",null,null]}}]}"#).unwrap();
+        assert_eq!(load(&d)[0].loadout.main_abilities, MainAbilities::default());
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }

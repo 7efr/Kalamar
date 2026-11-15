@@ -14,6 +14,7 @@ import { NeedsGameData, type FieldNoteData } from "./profile/common";
 import { Gear } from "./profile/Gear";
 import { Presets } from "./profile/Presets";
 import { applyPreset, type Preset } from "./profile/presetLogic";
+import { GEAR_PARTS, mainChoices } from "./profile/subSlots";
 import { Splashtag, TagPreview } from "./profile/Splashtag";
 import { Weapon } from "./profile/Weapon";
 
@@ -86,9 +87,12 @@ export default function Profile({ notify }: { notify: (n: Notice | null) => void
   }, [load]);
 
   useEffect(() => { void api.iconCache().then(setCache).catch(() => {}); }, [tab]);
-  // Does the installed game apply sub-abilities? Asked apart from the catalogue: the first answer may run the game's
-  // capability listing (once per executable, no window).
-  useEffect(() => { void api.gearAbilitiesInfo().then(setSubs).catch(() => setSubs({ supported: false, update_needed: false, abilities: [] })); }, []);
+  // Does the installed game apply sub-abilities and main abilities? Asked apart from the catalogue: the first answer may
+  // run the game's capability listing (once per executable, no window).
+  useEffect(() => {
+    void api.gearAbilitiesInfo().then(setSubs)
+      .catch(() => setSubs({ supported: false, update_needed: false, abilities: [], main_supported: false, main_update_needed: false, main_abilities: [] }));
+  }, []);
   // During an installation the game data becomes readable when its merge ends (long before the compile does): the
   // catalogue is read again then, without touching what the player is editing.
   useEffect(() => {
@@ -133,7 +137,8 @@ export default function Profile({ notify }: { notify: (n: Notice | null) => void
   const applyLoadout = (preset: Preset) => {
     if (!cat) return;
     const has = (field: "head" | "clothes" | "shoes" | "weapon", id: number) => (cat.categories[field] ?? []).some((e) => e.id === id && e.selectable);
-    const { profile: next, skipped } = applyPreset(p, preset, { has, subs: !!subs?.supported, abilities: subs?.abilities });
+    const mainAbilities = Object.fromEntries(GEAR_PARTS.map((part) => [part, mainChoices(subs?.main_abilities ?? [], cat.categories[part] ?? [])]));
+    const { profile: next, skipped } = applyPreset(p, preset, { has, subs: !!subs?.supported, abilities: subs?.abilities, main: !!subs?.main_supported, mainAbilities });
     setP(next);
     void saveProfile(next, skipped > 0 ? t("presets.applied.partial", { name: preset.name, n: skipped }) : t("presets.applied", { name: preset.name }));
   };

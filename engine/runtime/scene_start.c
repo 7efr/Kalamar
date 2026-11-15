@@ -190,8 +190,9 @@ void scene_fn_hit(uint64_t addr, uint64_t lr, uint64_t x0) {
     if (__builtin_expect(trace_n, 0))
         for (int k = 0; k < trace_n; k++)
             if (trace_addr[k] == addr) {
-                if (mgb_on()) mgb_mark("fn", addr - main_base);   // the bench's timeline instead of the log
-                else trace_hit(k, addr, lr);
+                // the bench's timeline (past the 8th function only in its detail window), and the log's first calls
+                if (mgb_on() && (k < 8 || mgb_detail())) mgb_mark("fn", addr - main_base);
+                if (!mgb_on() || trace_count[k] < 40) trace_hit(k, addr, lr);
                 break;
             }
     if (!start_on || addr != main_base + REQUEST_SCENE) return;

@@ -30,6 +30,11 @@
 # draws the frame instead of a whole frame earlier (12 ms less at 60 fps). 0 reads them early again. Takes effect at
 # once; has no effect with frame_queue = 1.
 # late_input = 1
+# Input first (Splatoon 3 11.3.0): the game reads the mouse, the keys and the controller before it runs the frame's
+# logic instead of after it, so the next picture on screen shows them: one frame (16.7 ms at 60 fps) less between the
+# input and the screen. Each frame still reads the input once and runs its logic once; only their order changes. 0
+# keeps the game's order. Takes effect at once.
+# input_first = 1
 # Real-time frame step: game speed follows the clock instead of the frame count.
 # realtime = 1
 # Cloth simulation on the real-time clock. Needs realtime = 1.
@@ -362,7 +367,8 @@
 # mouse_gyro_invert_y = 0
 # How far the virtual controller tilts up or down, in degrees (10 to 89). The game's camera reaches its own limits
 # (60 degrees up, 75 down) with the controller about 25 degrees up or 31 down at its default motion sensitivity; past
-# 65 degrees down the game stops following the controller for a while.
+# 65 degrees down the game stops following the controller for a while. With native mouse aiming (mouse_native) the
+# controller's tilt follows the view, 10 degrees inside this limit at most, so the limit no longer bounds the aim.
 # mouse_gyro_pitch = 60
 # A key that levels the virtual controller (none: no key; the Y button recenters the game's camera and leaves the
 # controller as it is). Levelling turns the camera's pitch by as much at the next vertical move. Key names as in the bind_

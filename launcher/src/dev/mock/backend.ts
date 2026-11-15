@@ -36,7 +36,7 @@
 import schemaJson from "../../../src-tauri/resources/settings-schema.json";
 import { emit } from "./event";
 import { markDialogDone } from "../../update/prompt";
-import { MOCK_SUB_ABILITIES, STAGE_IDS, catalogue, stagesView } from "./catalogue";
+import { MOCK_MAIN_ABILITIES, MOCK_SUB_ABILITIES, STAGE_IDS, catalogue, stagesView } from "./catalogue";
 import { mockDraft, mockDraftAct, mockDraftMatch } from "./draft";
 import { META_STANDS, OLD_REFUSAL, ROOM_FIELDS, ROOM_STANDS, standsDraft, standsMatch, standsRoom, standsRunner, watchable } from "./stands";
 
@@ -174,11 +174,12 @@ function peek(): any[] {
 let presets: any[] = [];
 // ---- profile ------------------------------------------------------------------------------------------------------
 let profile: any = S.profile === "empty"
-  ? { schema: 1, name: "", style: null, skin: null, eyes: null, hair: null, eyebrows: null, legwear: null, legwear_variation: null, head: null, clothes: null, shoes: null, weapon: null, banner: null, title: { adjective: null, subject: null }, badges: [null, null, null], sub_abilities: { head: null, clothes: null, shoes: null } }
+  ? { schema: 1, name: "", style: null, skin: null, eyes: null, hair: null, eyebrows: null, legwear: null, legwear_variation: null, head: null, clothes: null, shoes: null, weapon: null, banner: null, title: { adjective: null, subject: null }, badges: [null, null, null], sub_abilities: { head: null, clothes: null, shoes: null }, main_abilities: { head: null, clothes: null, shoes: null } }
   : {
     schema: 1, name: "Mira", style: 1, skin: 3, eyes: 5, hair: S.profile === "incomplete" ? null : 2, eyebrows: 1, legwear: S.profile === "incomplete" ? null : 3, legwear_variation: 1,
     head: 4, clothes: 9, shoes: 2, weapon: 7, banner: 5, title: { adjective: 2, subject: 4 }, badges: [3, null, 11],
     sub_abilities: { head: ["a0", "a2", "a2"], clothes: ["a1", null, null], shoes: null },
+    main_abilities: { head: "a5", clothes: null, shoes: null },
   };
 
 function preflight(): any {
@@ -646,7 +647,15 @@ export async function handle(cmd: string, args: any): Promise<any> {
     // Before a running install's merge is complete the Locker has only the neutral list.
     case "profile_catalogue": return snap.active && !snap.game_data ? { ...catalogue(), origin: "neutral", reason: "the game data is not merged yet" } : catalogue();
     case "gamedata_stages": return stagesView(S.stages === "none");
-    case "gear_abilities_info": return S.gear === "old" ? { supported: false, update_needed: true, abilities: [] } : S.gear === "none" ? { supported: false, update_needed: false, abilities: [] } : { supported: true, update_needed: false, abilities: MOCK_SUB_ABILITIES };
+    // ?gear=old: an engine from before both; ?gear=sub: one that applies sub-abilities but not the main ability; ?gear=none: no game
+    case "gear_abilities_info": {
+      const off = { supported: false, update_needed: S.gear === "old", abilities: [] };
+      const subs = S.gear === "old" || S.gear === "none" ? off : { supported: true, update_needed: false, abilities: MOCK_SUB_ABILITIES };
+      const main = S.gear === "old" || S.gear === "sub" ? { main_supported: false, main_update_needed: true, main_abilities: [] }
+        : S.gear === "none" ? { main_supported: false, main_update_needed: false, main_abilities: [] }
+        : { main_supported: true, main_update_needed: false, main_abilities: MOCK_MAIN_ABILITIES };
+      return { ...subs, ...main };
+    }
     case "profile_load": return profile;
     case "profile_save": profile = { ...args.profile }; return profile;
     // Loadout presets: kept in memory, with the same rules as the backend (trimmed unique names, at most 30).

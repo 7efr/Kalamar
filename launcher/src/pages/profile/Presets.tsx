@@ -26,6 +26,7 @@ export function Presets({ cat, profile, subs, t, onApply }: {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
   const withSubs = !!subs?.supported;
+  const withMain = !!subs?.main_supported;
 
   // A list that cannot be read is an empty list: the Locker is never blocked by it.
   useEffect(() => { void api.loadoutsList().then(setList).catch(() => setList([])); }, []);
@@ -46,10 +47,11 @@ export function Presets({ cat, profile, subs, t, onApply }: {
     }
   };
 
-  // Sub-abilities are stored only when the installed game applies them.
+  // Sub-abilities and main abilities are stored only when the installed game applies them.
   const store = async (n: string) => {
     const l = loadoutOf(profile);
-    const loadout = withSubs ? l : { ...l, sub_abilities: { head: null, clothes: null, shoes: null } };
+    const none = { head: null, clothes: null, shoes: null };
+    const loadout = { ...l, sub_abilities: withSubs ? l.sub_abilities : none, main_abilities: withMain ? l.main_abilities : none };
     if (await run(() => api.loadoutsSave(n, loadout), t("presets.saved", { name: n.trim() }))) setName("");
   };
   const onSave = () => {
@@ -78,7 +80,7 @@ export function Presets({ cat, profile, subs, t, onApply }: {
       ) : (
         <ul className="preset-list">
           {list.map((p) => {
-            const current = matches(p, profile, withSubs);
+            const current = matches(p, profile, withSubs, withMain);
             return (
               <li key={p.name} className={`preset ${current ? "preset-on" : ""}`}>
                 <div className="preset-icons" aria-hidden="true">

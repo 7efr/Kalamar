@@ -12,6 +12,8 @@ int mouse_native_active(void);
 // The last frame of the linear pitch, for the bench (mgyro_bench.c): the curve's own result, the pitch handed out,
 // the pose's view pitch for the camera's pitch before the frame and the one wanted, the final view pitch aimed at
 // (degrees, up positive), the yaw gain used (camera degrees per controller degree), the slope of the final view's
-// offset from the pose's that the frame used, and 1 when the frame took the curve's result as it is.
+// offset from the pose's that the frame used, and how the frame went: 0 aimed at the view drawn, 1 took the curve's
+// result as it is, 2 and 3 a change of the camera that moved the pitch by the turn along the pose of the moment (2) or,
+// during a change of form, along the table of the camera before it (3).
 typedef struct { float game, out, view, want, target, gain, slope; int resync; } MouseNativePitch;
 MouseNativePitch mouse_native_pitch_debug(void);

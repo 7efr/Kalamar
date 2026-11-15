@@ -664,6 +664,8 @@ NVN_API(nvnQueueSubmitCommands) {
     const uint64_t *h = arg_p(c, 2);
     if (n < 0 || (n && !h)) rt_fatal("nvn: QueueSubmitCommands with %d handles at %p", n, (const void *)h);
     mgb_mark("submit", c->x[30]);
+    if (mgb_detail())
+        for (int i = 0; i < n; i++) mgb_mark2("subh", c->x[0], h[i]);
     NVN_BLOCKING();
     uint64_t no = __atomic_add_fetch(&lod_entered, 1, __ATOMIC_SEQ_CST);
     q->submits++;
