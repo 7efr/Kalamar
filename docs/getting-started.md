@@ -14,9 +14,9 @@ Install the launcher, let it build the game from your own files, play offline. N
 
 ## 1. Install and build
 
-1. Install the launcher. No release is published yet: build it from source as
-   [CONTRIBUTING.md](../CONTRIBUTING.md#building-and-testing-the-launcher) explains (`npm run tauri build` in
-   `launcher/`).
+1. Install the launcher: download `Kalamar.exe` or the installer from the
+   [releases page](https://github.com/CyriacFR/Kalamar/releases). To build it from source instead, see
+   [CONTRIBUTING.md](../CONTRIBUTING.md#building-and-testing-the-launcher) (`npm run tauri build` in `launcher/`).
 2. At first start the install wizard takes the whole window: **Welcome → Your files → What will be installed →
    Install → Done**.
 3. *Your files*: pick the game, the update and the keys file, and an install folder. The wizard checks the update's
