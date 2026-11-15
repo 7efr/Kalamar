@@ -471,6 +471,7 @@ function request(method: string, path: string, body?: any): any {
     if (p === "/v1/matches/m-1" && draftNow) return draftNow;
     if (p === "/v1/queues") return { items: queues };
     if (p === "/v1/friends") return { items: [{ user: opponent, presence: "online", since: "2026-10-20T18:00:00Z" }, { user: user("u-3", "Sacha"), presence: "in_match", since: "2026-10-22T18:00:00Z" }] };
+    if (p === "/v1/blocks") return { items: [{ user: user("u-9", "Mako"), since: "2026-11-01T10:00:00Z" }] };
     if (p === "/v1/friends/requests") return { incoming: [{ id: "fr-1", user: user("u-4", "Noor") }], outgoing: [] };
     if (p === "/v1/ladders") return { items: [{ id: "1v1", name: L("Duel", "Duel", "Duelo", "デュエル"), primary: true, season: { id: "s1", name: L("Saison 1", "Season 1", "Temporada 1", "シーズン1") } }, { id: "4v4", name: L("Équipe", "Team", "Equipo", "チーム") }] };
     if (/\/ratings$/.test(p)) return { items: [{ ladder: "1v1", display: "1 214", tier: { id: "gold", name: L("Or", "Gold", "Oro", "ゴールド"), color: "#e0b43b" }, progress: { value: 64, max: 100, label: L("64 / 100 vers Platine", "64 / 100 to Platinum", "64 / 100 hacia Platino", "プラチナまで 64 / 100") }, last_change: { delta: 14 } }] };
