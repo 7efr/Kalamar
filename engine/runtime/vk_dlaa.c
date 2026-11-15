@@ -104,6 +104,8 @@ static int p_getp(const NgxParam *p, const char *n, void **v) { return NGX_OK(((
 // loading the driver's NGX core on every NVIDIA machine would cost start time and change the device with DLAA off. So
 // dlaa applies after a restart; switched off, nothing else of DLAA runs.
 int vk_dlaa_wanted(void) {
+    const char *u = cfg_get("TOTK_UPSCALER");
+    if (u && (!strcmp(u, "dlss") || !strcmp(u, "dlaa"))) return 1;
     static int wanted = -1;
     if (wanted < 0) wanted = cfg_bool("TOTK_DLAA");
     return wanted;
@@ -279,6 +281,15 @@ static struct {
     uint8_t *mvm_map;
     uint32_t mvm_slot;
     double cam_prev[16];         // last frame's view-projection (rows 3-6 of its block), for the reprojection
+    // Scene data for the FSR provider (vk_fsr4.c): this frame's view-projection, depth target and the jitter used.
+    float fsr_vp[16];
+    int fsr_vp_ok;
+    VkImage fsr_depth, fsr_color;   // the scene's depth and colour targets: what the jitter moves (a frame's draws)
+    VkFormat fsr_depth_fmt;
+    uint32_t fsr_w, fsr_h;
+    float fsr_jx, fsr_jy;
+    uint64_t fsr_vp_frame;       // gfx_counters.frames the camera block was last copied at (one read a frame)
+    float fsr_near, fsr_far, fsr_fov;   // its near and far planes and the vertical field of view (radians)
     int cam_slot, cam_prev_ok;   // the slot this frame writes / the other slot holds last frame's camera
     VkDescriptorSetLayout mv_dsl;
     VkPipelineLayout mv_layout;
@@ -841,10 +852,38 @@ static int ended_at(const VkExec *ex) {
 }
 
 void vk_dlaa_viewport(VkExec *ex, VkViewport *v) {
-    if (!D.jit_ok || !ex->depth.image || ex->depth.image != D.jdepth || ended_at(ex)) return;
+    // The scene's 3D draws and whatever the game composites into the same picture (its HUD, menus, the result of its own
+    // scaling pass) must all take the same subpixel offset: a draw that skips it lands half a pixel off the frame the
+    // upscaler is told about, and its history then wobbles while the camera moves.
+    int scene = (ex->depth.image && ex->depth.image == D.jdepth) ||
+                (D.fsr_color && ex->color[0].image == D.fsr_color);
+    if (!D.jit_ok || !scene || ended_at(ex)) return;
     v->x += D.jx, v->y += D.jy;
     D.ux = D.jx, D.uy = D.jy;
+    D.fsr_jx = D.jx, D.fsr_jy = D.jy;
     __atomic_store_n(&D.jit_used, 1, __ATOMIC_RELAXED);
+}
+
+// The scene inputs the FidelityFX upscaler takes (vk_fsr4.c): the camera block of the scene draws, the depth target they
+// write and the jitter the viewport gave them. Both games' scene blocks hold their view-projection at the same place, rows
+// 3-6 of the block (+0x30, row-major, OpenGL clip depth), so the motion vectors work from one read of it. The near and far
+// planes and the field of view are read where the block has them (Splatoon 3: +0xe0 and the projection at +0x70) and
+// sanity-checked: a block without them keeps the defaults below.
+//
+// The block is written once a frame, but every scene draw carries the same copy; it is read once a frame here because a
+// snapshot lookup per draw cost about 14 ms of replay time a frame (36 fps against 60).
+static void note_fsr_scene(uint64_t cam, const VkExecTarget *z) {
+    if (!cam || !z->image || z->width < DLAA_SCENE_MIN_W || z->format != VK_FORMAT_D32_SFLOAT) return;
+    uint64_t f = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
+    if (f == D.fsr_vp_frame) return;
+    D.fsr_vp_frame = f;
+    D.fsr_depth = z->image, D.fsr_depth_fmt = z->format, D.fsr_w = z->width, D.fsr_h = z->height;
+    const float *vp = (const float *)vk_usnap_bytes(cam + 48, 64);
+    if (vp) memcpy(D.fsr_vp, vp, sizeof D.fsr_vp), D.fsr_vp_ok = 1;
+    const float *nf = (const float *)vk_usnap_bytes(cam + 0xe0, 8);
+    if (nf && nf[0] > 0.0f && nf[1] > nf[0] && nf[1] < 1.0e7f) D.fsr_near = nf[0], D.fsr_far = nf[1];
+    const float *pj = (const float *)vk_usnap_bytes(cam + 0x70, 24);
+    if (pj && pj[5] > 0.0f && pj[5] < 1.0e4f) D.fsr_fov = 2.0f * atanf(1.0f / pj[5]);
 }
 
 // The scene camera: c4 of the last scene draw before the scene ends. A chunked replay's scan notes it in replay order
@@ -853,11 +892,40 @@ static void note_camera(const VkExec *ex) {
     const p_bind_buf *b = &ex->ubo[0][1];   // constant bank c4: the replay keeps user banks from c3 on
     const VkExecTarget *z = &ex->depth;
     if (b->size == 0x940 && b->addr && z->image && z->width >= DLAA_SCENE_MIN_W && z->format == VK_FORMAT_D32_SFLOAT &&
-        (!D.jdepth || z->image == D.jdepth))
+        (!D.jdepth || z->image == D.jdepth)) {
         D.cam_addr = b->addr;
+        note_fsr_scene(b->addr, z);
+    }
+    // Splatoon 3: the camera and scene block is c3 (uniform slot 0), 0x920 bytes.
+    const p_bind_buf *b3 = &ex->ubo[0][0];
+    if (b3->size == 0x920 && b3->addr && z->image && z->width >= DLAA_SCENE_MIN_W &&
+        z->format == VK_FORMAT_D32_SFLOAT) {
+        D.cam_addr = b3->addr;
+        note_fsr_scene(b3->addr, z);
+        static int once;
+        if (!once++) rt_log("upscale: Splatoon camera in c3 (%#llx), view-projection at +0x30", (unsigned long long)b3->addr);
+    }
 }
 
 void vk_dlaa_draw(VkExec *ex) {
+    if (vk_fsr4_ready() && !ended_at(ex)) {
+        const VkExecTarget *z = &ex->depth;
+        if (z->image && z->format == VK_FORMAT_D32_SFLOAT && z->width >= DLAA_SCENE_MIN_W) {
+            D.jdepth = z->image;
+            if (ex->color[0].image) D.fsr_color = ex->color[0].image;
+            D.jit_ok = 1;
+            // one Halton phase a presented frame: the provider stacks 16 subpixel samples into its history
+            static uint64_t last;
+            uint64_t f = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
+            if (f != last) {
+                last = f;
+                uint32_t i = (uint32_t)(f % 16) + 1;
+                D.jx = halton(i, 2) - 0.5f, D.jy = halton(i, 3) - 0.5f;
+                D.fsr_jx = D.fsr_jy = 0.0f;   // until a scene draw takes it (vk_dlaa_viewport)
+            }
+            note_camera(ex);
+        }
+    }
     if (!dl_active() || ended_at(ex)) return;
     static int survey = -1;   // TOTK_DLAA_SURVEY=1 (test): what is drawn into the armed light target
     if (survey < 0) survey = rt_knob("DLAA_SURVEY", "0");
@@ -1317,3 +1385,21 @@ int vk_dlaa_skip_draw(VkExec *ex, const GfxShader *fs) {
     return !fxaa;
 }
 
+
+// The FSR provider's scene inputs (vk_fsr4.c): this frame's view-projection, the depth target the scene draws use,
+// and the jitter the scene was drawn with. 0: the game has not presented a scene frame yet.
+int vk_dlaa_scene_data(VkImage *depth, VkFormat *fmt, uint32_t *w, uint32_t *h, float vp[16], float *jx, float *jy,
+                       float *near, float *far, float *fov) {
+    if (!D.fsr_vp_ok || !D.fsr_depth) return 0;
+    if (depth) *depth = D.fsr_depth;
+    if (fmt) *fmt = D.fsr_depth_fmt;
+    if (w) *w = D.fsr_w;
+    if (h) *h = D.fsr_h;
+    if (vp) memcpy(vp, D.fsr_vp, sizeof D.fsr_vp);
+    if (jx) *jx = D.fsr_jx;
+    if (jy) *jy = D.fsr_jy;
+    if (near) *near = D.fsr_near;
+    if (far) *far = D.fsr_far;
+    if (fov) *fov = D.fsr_fov;
+    return 1;
+}
