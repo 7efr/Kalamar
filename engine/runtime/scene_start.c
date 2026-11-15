@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "mgyro_bench.h"
 #include "cfg.h"
 #include "host.h"
 #include "platform/platform.h"
@@ -188,7 +189,11 @@ void scene_fn_hit(uint64_t addr, uint64_t lr, uint64_t x0) {
     }
     if (__builtin_expect(trace_n, 0))
         for (int k = 0; k < trace_n; k++)
-            if (trace_addr[k] == addr) { trace_hit(k, addr, lr); break; }
+            if (trace_addr[k] == addr) {
+                if (mgb_on()) mgb_mark("fn", addr - main_base);   // the bench's timeline instead of the log
+                else trace_hit(k, addr, lr);
+                break;
+            }
     if (!start_on || addr != main_base + REQUEST_SCENE) return;
     Cpu *c = kern_cpu();
     if (!c) return;

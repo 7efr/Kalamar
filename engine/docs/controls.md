@@ -68,13 +68,44 @@ Spectating a private battle (a spectator's seat, [auto-match.md](auto-match.md),
 
 ## Mouse as the gyro
 
-`mouse_gyro = auto` (the default) turns the mouse into the six-axis sensor on a Splatoon 3 build and leaves it the right stick on Tears of the Kingdom; `1` and `0` force either. The game polls `nn::hid::GetSixAxisSensorStates(state *, 16, handle)` once per frame from its main thread (about 60 a second) for the full-key controller's sensor (handle `0x20003`) and reads the angular velocity, the direction matrix and the acceleration of each 0x60-byte state. The motion thread (`runtime/input.c`, `mouse_gyro_tick`) takes the raw mouse counts every 4 ms and turns them, on a 5 ms grid by elapsed time (200 Hz, `delta_ns` 5000000, consecutive sampling numbers, as the Switch's sensor), into samples of a virtual controller (`runtime/mouse_gyro.c`): each sample carries an equal share of the counts since the previous one, so none is lost between frames. Mouse right turns right (angular velocity about the world's vertical axis), mouse up looks up (about the controller's x axis). The direction matrix and the gravity vector come from the same yaw and pitch, so they agree with the integrated angular velocity (`--probe-mgyro` checks it); pitch stops at `mouse_gyro_pitch` degrees. There is no acceleration or smoothing.
+`mouse_gyro = auto` (the default) turns the mouse into the six-axis sensor on a Splatoon 3 build and leaves it the right stick on Tears of the Kingdom; `1` and `0` force either. The game polls `nn::hid::GetSixAxisSensorStates(state *, 16, handle)` once per frame from its main thread (about 60 a second) for the full-key controller's sensor (handle `0x20003`) and reads the angular velocity, the direction matrix and the acceleration of each 0x60-byte state. The motion thread (`runtime/input.c`, `mouse_gyro_tick`) takes the raw mouse counts every 4 ms and turns them, on a 5 ms grid by elapsed time (200 Hz, `delta_ns` 5000000, consecutive sampling numbers, as the Switch's sensor), into samples of a virtual controller (`runtime/mouse_gyro.c`): each sample carries an equal share of the counts since the previous one, so none is lost between frames. Mouse right turns right (angular velocity about the world's vertical axis), mouse up looks up (about the controller's x axis). The direction matrix and the gravity vector come from the same yaw and pitch, so they agree with the integrated angular velocity (`--probe-mgyro` checks it); pitch stops at `mouse_gyro_pitch` degrees. The conversion adds no acceleration or smoothing; the game's own smoothing of the sensor is switched off for the mouse by `mouse_native` (below).
 
 - `mouse_gyro_sens`: degrees of controller turn per count (default 0.04, 0.002 to 1). The game's own camera sensitivity in its Options multiplies it.
 - `mouse_gyro_x`, `mouse_gyro_y`: a multiplier per axis; `mouse_gyro_invert_y = 1` inverts the vertical axis.
 - `mouse_gyro_recenter_key`: a key that levels the virtual controller. The Y button (Q) does it too, since it recenters the game's camera.
 - `motion = 0` turns every motion source off, the mouse's included. A real gamepad's gyro (when SDL exposes it) is read instead while the gamepad is the device used last, and the mouse takes over again when a key or the mouse moves.
 - The game's Options must have motion controls on (a new profile has them on: the tutorial teaches "tilt the controller to move the reticle" and calibrates by asking to look up and down); with them off the game ignores the sensor and the mouse does nothing, so set `mouse_gyro = 0` (the mouse is then a right stick) or turn them on. `mouse_sens = 0` still turns the mouse off entirely.
+- `mouse_native` (default `1`, live; Splatoon 3 11.3.0): native mouse aiming, below.
+
+### Native mouse aiming
+
+The game smooths a real controller's motion in three places, which made the mouse feel like "aiming through jello": its gyro processor hands the cameras a filtered attitude (a state about two samples behind the newest, blended into a prediction of the previous output with a weight that drops to 0.2 when the attitude jumps and recovers by 0.2 a frame), the player camera eases its pitch toward the pitch it computes by about 0.3 of the distance a frame, and it damps a yaw turn that follows motion the other way (the gain drops as low as 0.1 and recovers over about ten frames, the cut part given back later). Yaw comes from the newest state's angular velocity, so it was already whole in one frame; pitch comes from the attitude and lagged by about eight frames. While the mouse's virtual controller is the sensor the game reads and `mouse_native = 1`, `runtime/mouse_native.c` turns the three off: a switch of the game's own gyro tuning data makes the processor hand out the newest attitude, and two hooks (`recomp/patches-splatoon3-v1130.txt`, set `mouse_native`) make the camera take its pitch target whole and the yaw turn undamped; the pitch is also made linear (below). The game keeps everything else: the motion sensitivity of its Options, its pitch limits, the Y recentre, collisions, the camera modes and what it sends to the other players. A gamepad's gyro gets the game's smoothing and pitch curve back as soon as it is the source again. `mouse_native = 0` gives the mouse the game's smoothing and curve too. 11.2.0 has neither the switch's address nor the hooks: there the setting does nothing.
+
+Measured with the bench (`KLM_MGYRO_BENCH=native`, test range, 0.04 degrees per count, the game's default motion sensitivity; both settings in one run):
+
+| | `mouse_native = 0` | `mouse_native = 1` |
+| --- | --- | --- |
+| Pitch step (8 and 2 degrees of controller pitch) | 2 to 7% of the turn in each of the first three frames, 90% only 10 to 11 frames after the first move | whole in the first frame that moves, the same frame as a yaw step |
+| Yaw step | whole in one frame | whole in one frame |
+| Yaw back and forth (240 counts at 1200 counts/s, five cycles) | best fit 3 frames late with 0.86 of the gain, 19% of the swing left unexplained | best fit as late as a yaw step, full gain, 0.0% unexplained |
+| Circles of 250 counts in 1 s and 0.5 s: pitch delay | 8 frames | as late as the yaw (2 frames on that aim vector) |
+
+#### Linear pitch
+
+With the smoothing off the pitch still followed the game's pitch curve, which maps the controller's tilt to the camera's pitch: 25-count steps over the whole range turned the view by 0.030 to 0.112 degrees per count between 55 degrees up and 55 down, depending on where the pitch was (0.098 at level just after a Y), and less and less toward the top limit, while yaw turned 0.0957 everywhere (0.04 degrees per count and the bench profile's motion sensitivity, at which the game turns its yaw 2.393 degrees per degree of controller turn). On circles that left about 4.5% of the pitch's swing that no straight fit explains, at every speed.
+
+With `mouse_native = 1` the mouse's pitch turns by the yaw's own degrees per count over the whole range, in degrees of the view drawn. Three more sites of the same set do it: one reads the yaw's gain where the camera applies it, and two take the place of the camera's calls of its pitch curve, where the host calls the curve and the camera's pose function itself and hands out the pitch whose pose puts the view where the counts say; each frame it reads the view the camera drew and takes back in the next frame what the camera's later placement of its target added, including the slow settling of that placement after the mouse stops (`runtime/mouse_native.c`, part 4). The game keeps its limits (on the bench 60.4 degrees up and 72 to 73 down, where the view goes on settling by itself for a few seconds), the Y recentre, collisions and the camera modes; motion past a limit is dropped, so a turn back moves the view at once. The right stick's vertical aim, which the camera adds to the tilt before its curve, goes the same way while the mouse is the source (not measured).
+
+Measured with the bench (`KLM_MGYRO_BENCH=sweep,step,vsine,circle,reverse,recenter,limits`, test range, 0.04 degrees per count, the view's pitch read from the camera's own view direction; each circle and up-and-down test starts from a level camera):
+
+| | Game's pitch curve (smoothing off) | Linear pitch |
+| --- | --- | --- |
+| Pitch degrees per count, 25-count steps over the range both ways | 0.030 to 0.112 between 55 up and 55 down, 0 at the top limit | 0.0951 to 0.0966 from the top limit to 71 down (yaw 0.0957, at most 0.94% off), 0.0951 to 0.0964 between 55 up and 55 down |
+| Pitch steps of 50 and 200 counts | as the steps above | 0.0957 degrees per count, 99.3 to 100.3% of the turn in the first frame that moves |
+| Circles of 250 counts, 2 s to 0.33 s a turn: pitch left after a straight fit at the yaw's gain | 4.4 to 4.5% | 0.1 to 0.6% |
+| Circles of 60 counts in 0.5 s | 2.8% | 0.1% |
+| Up and down only, 60 to 500 counts, 2 s to 0.5 s | not measured | 0.04 to 0.2% |
+| Lag behind the counts, pitch and yaw | 1 read | 1 read |
 
 ## Xbox button prompts
 

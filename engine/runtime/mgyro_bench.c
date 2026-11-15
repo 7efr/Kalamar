@@ -6,7 +6,8 @@
 // then on each six-axis read of the game logs those vectors with the controller's own yaw and pitch.
 //
 // <tests>: "all" or a list (commas or spaces) of look, idle, lin, step, phase, rate, rt, fields, pitchyaw, yawaxis,
-// reverse, cap, recenter, limits, hitch, fps, image; the finder always runs first, after a Y that recentres the camera.
+// reverse, cap, recenter, limits, hitch, fps, image, circle, vsine, pokecmp, native, sweep; the finder always runs
+// first, after a Y that recentres the camera. TOTK_MGYRO_BENCH_OBJ, _FIELDS and _POKE: below (watches, pokes).
 // TOTK_MGYRO_BENCH_OUT: the CSV file (default mgyro-bench.csv);
 // TOTK_MGYRO_BENCH_DELAY: seconds after the first live six-axis read before the bench starts (default 40, the test
 // range is up by then); TOTK_MGYRO_BENCH_EXIT=1 closes the game when the tests are done. tools/mgyro_bench.py turns the
@@ -23,6 +24,10 @@
 //                                                    count sent so far, and the aim vectors now
 //   P,<present>,<t>,<slot>,<read>                    the game's present call and the display time it is held to
 //   F,<slot>,<t>                                     the host present of that frame
+//   W,<read>,<values>                                the watched fields (TOTK_MGYRO_BENCH_FIELDS)
+//   N,<read>,<curve>,<out>,<view>,<want>,<target>,<gain>,<slope>,<resync>
+//                                                    mouse_native's linear pitch in the frame before the read
+//                                                    (mouse_native.h MouseNativePitch)
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -34,6 +39,7 @@
 #include "host.h"
 #include "input.h"
 #include "mgyro_bench.h"
+#include "mouse_native.h"
 #include "platform/platform.h"
 
 enum { AIMS = 10, SRING = 8192 };
@@ -57,7 +63,7 @@ static volatile int32_t closed;   // the bench is done: nothing more is kept
 static void out(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void out(const char *fmt, ...) {
     if (__atomic_load_n(&closed, __ATOMIC_RELAXED)) return;
-    char line[640];
+    char line[1600];
     va_list ap;
     va_start(ap, fmt);
     int printed = vsnprintf(line, sizeof line, fmt, ap);
@@ -90,9 +96,12 @@ static void out_flush(void) {
     if (ofile) fflush(ofile);
 }
 
-// ---- the simulated mouse: one move at a time, its counts sent as packets at the polling rate
+// ---- the simulated mouse: one move at a time, its counts sent as packets at the polling rate. A straight move sends
+// (nx, ny) over dur; a circle (radius > 0) goes round radius counts from where it starts, cycles times in dur, clockwise
+// on screen from its rightmost point (x right, then y down), and ends where it started.
 static PlatMutex mv_lock = PLAT_MUTEX_INIT;
-static struct { int active; uint64_t t0, dur; double rate; int32_t nx, ny, sx, sy; } mv;   // sx, sy: sent so far
+// xscale: the circle's horizontal radius over its vertical one (0: up and down only); sx, sy: sent so far
+static struct { int active; uint64_t t0, dur; double rate, radius, cycles, xscale; int32_t nx, ny, sx, sy; } mv;
 static int64_t inj_x, inj_y;   // every count sent (mv_lock)
 
 void mgb_take(uint64_t now, double *dx, double *dy) {
@@ -106,6 +115,10 @@ void mgb_take(uint64_t now, double *dx, double *dy) {
             if (frac > 1) frac = 1;
         }
         int32_t tx = (int32_t)lround(mv.nx * frac), ty = (int32_t)lround(mv.ny * frac);
+        if (mv.radius > 0) {   // the point on the circle at this packet, relative to the start
+            double a = 2 * M_PI * mv.cycles * frac;
+            tx = (int32_t)lround(mv.radius * mv.xscale * (cos(a) - 1)), ty = (int32_t)lround(mv.radius * sin(a));
+        }
         int32_t ddx = tx - mv.sx, ddy = ty - mv.sy;
         mv.sx = tx, mv.sy = ty;
         if (frac >= 1) mv.active = 0;
@@ -182,6 +195,106 @@ static volatile int32_t started;
 
 static void bench_main(void *arg);
 
+// ---- watches: objects of the game taken at a function's entry, and floats of them logged after each read.
+// TOTK_MGYRO_BENCH_OBJ: main offsets (hex) of functions whose x0 on entry is the object to watch, object k being the
+// k-th function's; TOTK_MGYRO_BENCH_FIELDS: <k>+<hex offset>[*<n>] entries, n floats (default 1) of object k at that
+// offset. Each read then adds W,<read>,<values> (nan until the object is known). The function-entry hook runs only
+// while the bench looks for the objects (watch_find), since every lifted function calls it then.
+enum { WOBJ = 8, WFIELDS = 64, WSEEN = 4 };
+static uint64_t wfn[WOBJ];
+static uint64_t wseen[WOBJ][WSEEN];   // the distinct objects seen per function, the first one watched
+static volatile uint64_t wobj[WOBJ];
+static int nwfn, nwf;
+static struct { int k; uint32_t off, n; } wf[WFIELDS];
+static PlatMutex w_lock = PLAT_MUTEX_INIT;
+
+static uint64_t main_base(void) { return ldr_count() ? ldr_module(0)->base : 0; }
+
+static void watch_parse(void) {
+    const char *o = cfg_get("TOTK_MGYRO_BENCH_OBJ"), *f = cfg_get("TOTK_MGYRO_BENCH_FIELDS");
+    for (const char *p = o; p && *p && nwfn < WOBJ;) {
+        char *end;
+        unsigned long long off = strtoull(p, &end, 16);
+        if (end == p) break;
+        wfn[nwfn++] = main_base() + off;
+        p = end + (*end == ',');
+    }
+    for (const char *p = f; p && *p && nwf < WFIELDS;) {
+        int k, used = 0;
+        unsigned off, n = 1;
+        if (sscanf(p, "%d+%x%n", &k, &off, &used) != 2 || k < 0 || k >= nwfn) break;
+        p += used;
+        if (*p == '*') {
+            char *end;
+            n = (unsigned)strtoul(p + 1, &end, 10);
+            p = end;
+        }
+        wf[nwf].k = k, wf[nwf].off = off, wf[nwf].n = n < 1 ? 1 : n > 16 ? 16 : n;
+        nwf++;
+        while (*p && *p != ',') p++;
+        p += *p == ',';
+    }
+}
+
+void mgb_fn_hit(uint64_t addr, uint64_t x0) {
+    for (int k = 0; k < nwfn; k++) {
+        if (addr != wfn[k] || !x0) continue;
+        plat_mutex_lock(&w_lock);
+        for (int i = 0; i < WSEEN; i++) {
+            if (wseen[k][i] == x0) break;
+            if (!wseen[k][i]) {
+                wseen[k][i] = x0;
+                if (!i) __atomic_store_n(&wobj[k], x0, __ATOMIC_RELEASE);
+                break;
+            }
+        }
+        plat_mutex_unlock(&w_lock);
+    }
+}
+
+static void watch_line(int64_t r) {
+    if (!nwf) return;
+    char line[1500];
+    int k = snprintf(line, sizeof line, "W,%lld", (long long)r);
+    for (int i = 0; i < nwf && k < (int)sizeof line - 24; i++) {
+        uint64_t o = __atomic_load_n(&wobj[wf[i].k], __ATOMIC_ACQUIRE), a = o + wf[i].off;
+        int ok = o && mem_guest_readable(a, 4ull * wf[i].n);
+        for (uint32_t j = 0; j < wf[i].n && k < (int)sizeof line - 24; j++)
+            k += snprintf(line + k, sizeof line - (size_t)k, ok ? ",%.7g" : ",nan",
+                          ok ? (double)((const float *)(uintptr_t)a)[j] : 0.0);
+    }
+    out("%s", line);
+}
+
+// ---- pokes: TOTK_MGYRO_BENCH_POKE=<main hex offset>=<hex byte>[,...], bytes of main's data the pokecmp test writes
+// for its second half and puts back after: switches of the game, to compare its behavior with and without them
+enum { NPOKE = 8 };
+static struct { uint64_t off; uint8_t val, orig; } pk[NPOKE];
+static int npk;
+
+static void poke_parse(void) {
+    for (const char *p = cfg_get("TOTK_MGYRO_BENCH_POKE"); p && *p && npk < NPOKE;) {
+        unsigned long long off;
+        unsigned v;
+        int used = 0;
+        if (sscanf(p, "%llx=%x%n", &off, &v, &used) != 2) break;
+        pk[npk].off = off, pk[npk].val = (uint8_t)v, npk++;
+        p += used;
+        p += *p == ',';
+    }
+}
+
+static void poke_apply(int on) {
+    for (int i = 0; i < npk; i++) {
+        uint64_t a = main_base() + pk[i].off;
+        if (!mem_guest_readable(a, 1)) continue;
+        volatile uint8_t *b = (volatile uint8_t *)(uintptr_t)a;
+        if (on) pk[i].orig = *b, *b = pk[i].val;
+        else *b = pk[i].orig;
+        out("H,poke,main+%#llx=%#x", (unsigned long long)pk[i].off, (unsigned)*b);
+    }
+}
+
 void mgb_read(const MotionState *s, int n, uint64_t now) {
     if (!mgb_on()) return;
     if (!__atomic_load_n(&started, __ATOMIC_RELAXED) && !plat_xchg32(&started, 1))
@@ -205,6 +318,10 @@ void mgb_read(const MotionState *s, int n, uint64_t now) {
     out("R,%lld,%llu,%lld,%lld,%llu,%.6f,%.6f,%lld,%lld%s", (long long)r, (unsigned long long)now, (long long)s0,
         (long long)(s0 - last_s0), (unsigned long long)__atomic_load_n(&presents, __ATOMIC_RELAXED), cy, cp,
         (long long)ix, (long long)iy, aims);
+    watch_line(r);
+    MouseNativePitch np = mouse_native_pitch_debug();   // the linear pitch's previous frame (mouse_native.c)
+    out("N,%lld,%.6f,%.6f,%.4f,%.4f,%.4f,%.5f,%.5f,%d", (long long)r, np.game, np.out, np.view, np.want, np.target,
+        np.gain, np.slope, np.resync);
     last_s0 = s0;
     uint64_t lr = __atomic_load_n(&last_read_ns, __ATOMIC_RELAXED);
     if (lr && now > lr && now - lr < 100000000ull) {   // the frame period, smoothed over about 16 reads
@@ -238,6 +355,11 @@ void mgb_flip(uint64_t slot, uint64_t now) {
     out("F,%llu,%llu", (unsigned long long)slot, (unsigned long long)now);
 }
 
+void mgb_mark(const char *what, uint64_t v) {
+    if (!mgb_on()) return;
+    out("M,%llu,%s,%u,%llx", (unsigned long long)kern_now_ns(), what, plat_thread_id(), (unsigned long long)v);
+}
+
 // ---- the bench thread
 static void ev(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void ev(const char *fmt, ...) {
@@ -265,7 +387,15 @@ static void move_start(int nx, int ny, double cps, double rate, uint64_t t0) {
     double n = fmax(fabs((double)nx), fabs((double)ny));
     plat_mutex_lock(&mv_lock);
     mv.active = 1, mv.t0 = t0 ? t0 : kern_now_ns(), mv.dur = cps > 0 ? (uint64_t)(n / cps * 1e9) : 0;
-    mv.rate = rate, mv.nx = nx, mv.ny = ny, mv.sx = mv.sy = 0;
+    mv.rate = rate, mv.nx = nx, mv.ny = ny, mv.sx = mv.sy = 0, mv.radius = 0, mv.cycles = 0, mv.xscale = 1;
+    plat_mutex_unlock(&mv_lock);
+}
+
+// cycles turns of a circle of radius counts, each in period seconds, packets at rate Hz
+static void circle_start(double radius, double period, double cycles, double rate, double xscale) {
+    plat_mutex_lock(&mv_lock);
+    mv.active = 1, mv.t0 = kern_now_ns(), mv.dur = (uint64_t)(period * cycles * 1e9);
+    mv.rate = rate, mv.nx = mv.ny = 0, mv.sx = mv.sy = 0, mv.radius = radius, mv.cycles = cycles, mv.xscale = xscale;
     plat_mutex_unlock(&mv_lock);
 }
 
@@ -695,6 +825,23 @@ static void t_limits(void) {
     ev("lim level");
 }
 
+// The pitch over its whole range in small steps: after a Y, up in 25-count steps (1 degree of controller pitch at
+// 0.04) until 70 steps, down 140, up 70, each step settled for 12 reads, so the aim's degrees per count can be read
+// as a function of where it points, both ways.
+static void t_sweep(void) {
+    input_inject("Y 6");
+    wait_reads(90);
+    static const struct { int steps, dy; } seq[] = {{70, -25}, {140, 25}, {70, -25}};
+    for (size_t s = 0; s < sizeof seq / sizeof *seq; s++)
+        for (int k = 1; k <= seq[s].steps; k++) {
+            move(0, seq[s].dy, 2500, 1000);
+            wait_reads(12);
+            ev("sweep leg=%zu step=%d dy=%d", s, k, seq[s].dy);
+        }
+    settle();
+    ev("end");
+}
+
 static void t_hitch(void) {
     static const int64_t ms[] = {50, 100, 150};
     for (int sgn = 1; sgn >= -1; sgn -= 2) {
@@ -766,6 +913,103 @@ static void t_image(void) {
     }
 }
 
+// The mouse along circles: radius counts (250 is 10 degrees of controller turn at 0.04), a period from 2 s to 0.33 s,
+// clockwise on screen. A 1:1 aim draws the same circle, delayed by the input lag only; tools read its shape from the
+// injected counts and the aim vectors read by read. Each circle starts after a Y, from a level camera, so it stays
+// inside the pitch limits whatever the test before left.
+static void level_camera(void) {
+    input_inject("Y 6");
+    wait_reads(90);
+}
+
+static void circle_run(double radius, double period, double cycles, const char *tag) {
+    level_camera();
+    ev("circle r=%g period=%g cycles=%g%s", radius, period, cycles, tag);
+    circle_start(radius, period, cycles, 1000, 1);
+    move_wait();
+    settle();
+    ev("end");
+}
+
+static void t_circle(void) {
+    static const struct { double r, period, cycles; } c[] = {
+        {250, 2, 2}, {250, 1, 3}, {250, 0.5, 4}, {250, 0.333, 6}, {60, 0.5, 4}};
+    for (size_t i = 0; i < sizeof c / sizeof *c; i++) circle_run(c[i].r, c[i].period, c[i].cycles, "");
+}
+
+// The mouse up and down only, the vertical of a circle (radius counts each way from where it starts): the pitch alone,
+// over a wide part of its range at 500 counts, with no yaw to mix in. Each starts from a level camera.
+static void t_vsine(void) {
+    static const struct { double r, period, cycles; } c[] = {{250, 1, 3}, {500, 2, 2}, {500, 1, 3}, {60, 0.5, 4}};
+    for (size_t i = 0; i < sizeof c / sizeof *c; i++) {
+        level_camera();
+        ev("vsine r=%g period=%g cycles=%g", c[i].r, c[i].period, c[i].cycles);
+        circle_start(c[i].r, c[i].period, c[i].cycles, 1000, 0);
+        move_wait();
+        settle();
+        ev("end");
+    }
+}
+
+// One set of moves for a comparison, every event tagged: pitch steps (8 and 2 degrees of controller pitch at 0.04), yaw
+// steps (8 and 0.4 degrees), five back-and-forth cycles of the yaw at 1200 counts/s, circles.
+static void cmp_moves(const char *tag) {
+    static const struct { int axis, n; } st[] = {{1, -200}, {1, 200}, {1, -200}, {1, 200}, {1, -50}, {1, 50},
+                                                 {0, 200}, {0, -200}, {0, 10}, {0, -10}, {0, 10}, {0, -10}};
+    for (size_t i = 0; i < sizeof st / sizeof *st; i++) {
+        ev("step axis=%c n=%d%s", st[i].axis ? 'y' : 'x', st[i].n, tag);
+        move(st[i].axis ? 0 : st[i].n, st[i].axis ? st[i].n : 0, 0, 1000);
+        settle();
+        ev("end");
+    }
+    ev("reverse n=240 v=1200 cycles=5%s", tag);
+    for (int k = 0; k < 10; k++) move(k & 1 ? -240 : 240, 0, 1200, 1000);
+    settle();
+    ev("end");
+    circle_run(250, 1, 3, tag);
+    circle_run(250, 0.5, 4, tag);
+    circle_run(60, 0.5, 4, tag);
+}
+
+// The same moves without and with the pokes (TOTK_MGYRO_BENCH_POKE).
+static void t_pokecmp(void) {
+    if (!npk) { ev("pokecmp: no TOTK_MGYRO_BENCH_POKE"); return; }
+    cmp_moves(" poke=0");
+    poke_apply(1);
+    cmp_moves(" poke=1");
+    poke_apply(0);
+}
+
+// The same moves with native mouse aiming off (the game's gyro smoothing, mouse_native.c) and on, the setting
+// switched while the game runs; the setting's own value is put back after.
+static void t_native(void) {
+    char was[16];
+    snprintf(was, sizeof was, "%s", cfg_value("TOTK_MOUSE_NATIVE"));
+    cfg_set("TOTK_MOUSE_NATIVE", "0");
+    wait_reads(10);
+    cmp_moves(" native=0");
+    cfg_set("TOTK_MOUSE_NATIVE", "1");
+    wait_reads(10);
+    cmp_moves(" native=1");
+    cfg_set("TOTK_MOUSE_NATIVE", was);
+    wait_reads(10);
+}
+
+// The objects of TOTK_MGYRO_BENCH_OBJ: the function-entry hook for 30 reads, then off.
+static void watch_find(void) {
+    if (!nwfn) return;
+    fnprof_on(FNPROF_BENCH);
+    wait_reads(30);
+    fnprof_off(FNPROF_BENCH);
+    uint64_t heap = mem_layout()->heap.base;
+    for (int k = 0; k < nwfn; k++)
+        for (int i = 0; i < WSEEN && wseen[k][i]; i++)
+            out("H,obj%d,fn=main+%#llx,%s%#llx%s", k, (unsigned long long)(wfn[k] - main_base()),
+                wseen[k][i] >= heap ? "heap+" : "", (unsigned long long)(wseen[k][i] - (wseen[k][i] >= heap ? heap : 0)),
+                i ? " (not watched)" : "");
+    out_flush();
+}
+
 static int wants(const char *list, const char *name) {
     if (!strcmp(list, "all") || !strcmp(list, "1")) return 1;
     size_t n = strlen(name);
@@ -782,6 +1026,8 @@ static void bench_main(void *arg) {
     if (!ofile) rt_log("mgyro bench: cannot write %s", path);
     double delay = d && *d ? atof(d) : 40;
     rt_log("mgyro bench: tests '%s', starting %.0f s after the first live six-axis read, CSV %s", list, delay, path);
+    watch_parse();
+    poke_parse();
     // the first read with samples, then the delay
     while (!last_s0) plat_sleep_ns(10000000);
     uint64_t t0 = kern_now_ns();
@@ -815,6 +1061,7 @@ static void bench_main(void *arg) {
         }
     }
     if (!found) rt_log("mgyro bench: no aim vector: the tests log the controller only");
+    watch_find();
     if (wants(list, "look")) t_look();
     if (wants(list, "idle")) t_idle(10);
     if (wants(list, "lin")) t_lin(0), t_lin(1);
@@ -832,6 +1079,11 @@ static void bench_main(void *arg) {
     if (wants(list, "hitch")) t_hitch();
     if (wants(list, "fps")) t_fps();
     if (wants(list, "image")) t_image();
+    if (wants(list, "circle")) t_circle();
+    if (wants(list, "vsine")) t_vsine();
+    if (wants(list, "pokecmp")) t_pokecmp();
+    if (wants(list, "native")) t_native();
+    if (wants(list, "sweep")) t_sweep();
     if (wants(list, "idle")) t_idle(10);
     ev("done");
     wait_reads(10);

@@ -137,6 +137,13 @@ export interface Profile {
   /** Per gear part: null (never edited) or three slots, each an ability name of the game or null (empty). */
   sub_abilities: Record<"head" | "clothes" | "shoes", (string | null)[] | null>;
 }
+/** A loadout preset (loadouts.json): a name plus the outfit and weapon of a profile. */
+export interface LoadoutPreset {
+  name: string;
+  head: number | null; clothes: number | null; shoes: number | null; weapon: number | null;
+  sub_abilities: Profile["sub_abilities"];
+}
+export type Loadout = Omit<LoadoutPreset, "name">;
 export const EMPTY_PROFILE: Profile = {
   schema: 1, name: "", style: null, skin: null, eyes: null, hair: null, eyebrows: null, legwear: null, legwear_variation: null,
   head: null, clothes: null, shoes: null, weapon: null, banner: null, title: { adjective: null, subject: null }, badges: [null, null, null],
@@ -233,6 +240,10 @@ export const api = {
   cacheClear: () => call<void>("gamedata_cache_clear"),
   profileLoad: () => call<Profile>("profile_load"),
   profileSave: (profile: Profile) => call<Profile>("profile_save", { profile }),
+  loadoutsList: () => call<LoadoutPreset[]>("loadouts_list"),
+  loadoutsSave: (name: string, loadout: Loadout) => call<LoadoutPreset[]>("loadouts_save", { name, loadout }),
+  loadoutsRename: (from: string, to: string) => call<LoadoutPreset[]>("loadouts_rename", { from, to }),
+  loadoutsDelete: (name: string) => call<LoadoutPreset[]>("loadouts_delete", { name }),
   setMatchServer: (value: string) => call<ConfigView>("set_match_server", { value }),
   matchServerFromCard: (path: string) => call<string>("match_server_from_card", { path }),
   matchCreate: (request: MatchCreateRequest) => call<MatchPlan>("match_create", { request }),

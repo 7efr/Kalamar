@@ -7,6 +7,7 @@ use crate::lan::{self, LanRequest};
 use crate::launch::{self, GameManager, GameStatus, Notifier, RunState};
 use crate::game::catalogue::{self, Catalogue};
 use crate::game::service::{GameService, IconProgress};
+use crate::loadouts::{self, Loadout, Preset};
 use crate::profile::{self, Profile};
 use crate::{automatch, gamelang, matchcode, migrate, online, relay, servercard, startmode};
 use crate::settings::{self, Change, Schema, SettingsState};
@@ -1224,6 +1225,34 @@ pub fn profile_save(state: St, profile: Profile) -> AppResult<Profile> {
     let clean = validated(&state, &profile)?;
     profile::save_profile(&state.data_dir, &clean)?;
     Ok(clean)
+}
+
+// ---- loadout presets (loadouts.rs) ---------------------------------------------------------------------------------
+
+/// The saved presets (an unreadable file is an empty list).
+#[tauri::command]
+pub fn loadouts_list(state: St) -> Vec<Preset> {
+    loadouts::load(&state.data_dir)
+}
+
+/// Saves the loadout under `name`; an existing preset of that name (any case) is replaced. The ids are checked against
+/// the game data like a profile's.
+#[tauri::command(async)]
+pub fn loadouts_save(state: St, name: String, loadout: Loadout) -> AppResult<Vec<Preset>> {
+    let view = catalogue_view(&state, false);
+    let subs = state.sub_capable();
+    let clean = loadouts::validate_loadout(&loadout, &view.catalogue, subs.as_deref())?;
+    loadouts::save_preset(&state.data_dir, &name, clean)
+}
+
+#[tauri::command]
+pub fn loadouts_rename(state: St, from: String, to: String) -> AppResult<Vec<Preset>> {
+    loadouts::rename_preset(&state.data_dir, &from, &to)
+}
+
+#[tauri::command]
+pub fn loadouts_delete(state: St, name: String) -> AppResult<Vec<Preset>> {
+    loadouts::delete_preset(&state.data_dir, &name)
 }
 
 // ---- community servers by name (servers.rs) ----------------------------------------------------------------------

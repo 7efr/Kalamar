@@ -40,6 +40,7 @@
 #include "layout.h"
 #include "platform/platform.h"
 #include "auto_match.h"
+#include "mgyro_bench.h"
 #include "save_profile.h"
 #include "scene_start.h"
 #include "sha256.h"
@@ -178,6 +179,7 @@ void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0) {
     if (on & FNPROF_RES) res_fn_hit(addr, x0);
     if (on & (FNPROF_SCENE | FNPROF_TRACE)) scene_fn_hit(addr, lr, x0);
     if (on & FNPROF_AUTO) automatch_fn_hit(addr);
+    if (on & FNPROF_BENCH) mgb_fn_hit(addr, x0);
 }
 
 void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) {

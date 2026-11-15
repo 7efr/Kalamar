@@ -48,6 +48,7 @@ uint64_t nvn_new_serial(void);                             // next tex_t / prog_
 // wait for it or are queued for the GPU (vk_sync.c prologue), so the GPU never reads CPU writes the game made under
 // that assumption too early.
 void nvn_sync_ahead_present(void);
+void nvn_input_gate(void);   // nvn_api_obj.c: late input, called before a controller or six-axis state is read
 uint64_t nvn_sync_ahead_guard(void);
 int vk_mem_shadow_on(void);   // vk_memory.c: 1 with shadow storage on (valid once the Vulkan back end is up)
 void vk_mem_shadow_fence(void);   // vk_memory.c: returns once every shadow sync that read the old guard is done

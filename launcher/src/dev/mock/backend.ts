@@ -171,6 +171,7 @@ function peek(): any[] {
     : { id: s.id, session: { logged_in: false, provider: null, user_id: null, display_name: null }, description: L("Petit serveur du nord : salons privés et soirées à thème le vendredi.", "A small server up north: private rooms and themed Friday nights.", "Un pequeño servidor del norte: salas privadas y noches temáticas los viernes.", "北の小さなサーバー：プライベートルームと金曜のテーマナイト。"), features: ["rooms", "friends", "activities", ...(S.pop ? ["population"] : [])] });
 }
 
+let presets: any[] = [];
 // ---- profile ------------------------------------------------------------------------------------------------------
 let profile: any = S.profile === "empty"
   ? { schema: 1, name: "", style: null, skin: null, eyes: null, hair: null, eyebrows: null, legwear: null, legwear_variation: null, head: null, clothes: null, shoes: null, weapon: null, banner: null, title: { adjective: null, subject: null }, badges: [null, null, null], sub_abilities: { head: null, clothes: null, shoes: null } }
@@ -648,6 +649,26 @@ export async function handle(cmd: string, args: any): Promise<any> {
     case "gear_abilities_info": return S.gear === "old" ? { supported: false, update_needed: true, abilities: [] } : S.gear === "none" ? { supported: false, update_needed: false, abilities: [] } : { supported: true, update_needed: false, abilities: MOCK_SUB_ABILITIES };
     case "profile_load": return profile;
     case "profile_save": profile = { ...args.profile }; return profile;
+    // Loadout presets: kept in memory, with the same rules as the backend (trimmed unique names, at most 30).
+    case "loadouts_list": return presets;
+    case "loadouts_save": {
+      const name = String(args.name).trim();
+      if (!name || [...name].length > 24) throw { ...fail("validation", "invalid name"), fields: [{ key: "name", message: "name must be 1 to 24 characters" }] };
+      const i = presets.findIndex((p) => p.name.toLowerCase() === name.toLowerCase());
+      if (i >= 0) presets[i] = { ...args.loadout, name };
+      else if (presets.length >= 30) throw fail("invalid_input", "at most 30 presets can be saved");
+      else presets.push({ ...args.loadout, name });
+      return presets;
+    }
+    case "loadouts_rename": {
+      const to = String(args.to).trim();
+      const i = presets.findIndex((p) => p.name.toLowerCase() === String(args.from).toLowerCase());
+      if (i < 0) throw fail("invalid_input", "no such preset");
+      if (!to || [...to].length > 24 || presets.some((p, k) => k !== i && p.name.toLowerCase() === to.toLowerCase())) throw { ...fail("validation", "invalid name"), fields: [{ key: "name", message: "name is empty, too long or already used" }] };
+      presets[i] = { ...presets[i], name: to };
+      return presets;
+    }
+    case "loadouts_delete": presets = presets.filter((p) => p.name.toLowerCase() !== String(args.name).toLowerCase()); return presets;
     case "gamedata_icon_cache": return { files: 1832, bytes: 61_000_000, warming: false, dir: "C:\\Users\\user\\AppData\\Roaming\\dev.kalamar.launcher\\icons" };
     case "servers_view": return serversView();
     case "server_select": selectedId = args.id; return serversView();

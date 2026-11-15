@@ -27,3 +27,7 @@ void mgb_read(const MotionState *s, int n, uint64_t now);
 void mgb_present(const void *tex, uint64_t n, uint64_t now, uint64_t slot);
 // Present thread (vk_backend.c present_main): the host present of the frame held to display time slot went out at now.
 void mgb_flip(uint64_t slot, uint64_t now);
+// main.c fnprof_hit while FNPROF_BENCH is on: a function entry, for TOTK_MGYRO_BENCH_OBJ (the objects it watches).
+void mgb_fn_hit(uint64_t addr, uint64_t x0);
+// Any thread: a timeline mark "M,<t>,<what>,<thread>,<v>" (frame-order study: submits, acquires, reads by caller).
+void mgb_mark(const char *what, uint64_t v);

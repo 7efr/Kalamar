@@ -34,6 +34,7 @@ Not shown (still honored from the file or the environment). Reason in each case,
 - `hdr*`, `dlaa`, `dlss*`, `fxaa`: the HDR tonemap and the DLSS inputs are found by the upstream game's shader and motion-vector passes.
 - `movie_aspect`: this target links no libmovie. `prompts`: the button prompts are an overlay of the upstream game's fonts, which this target does not have.
 - `mouse_mode`, `mouse_aim_scale`, `stick_sens`, `menu_cursor`: hooks in the upstream game's camera and menus; this target's mouse is the motion sensor.
+- `mouse_native` (native mouse aiming, [controls.md](controls.md)): no row yet; on by default, `kalamar.ini` switches it.
 - `discord_app_id`, `discord_image`: written by the launcher (below), not chosen in the menu. The Mods, Cheats and Amiibo tabs and the scheduling, shader and texture rows of the Advanced tab belong to the upstream game's tooling and are not offered here.
 
 `menu_anim` (default `1`) turns the short open, close and selection animations of the ink layout off. A row's Delete key (X on a gamepad) puts its setting back to the default.
@@ -122,7 +123,10 @@ presence: it knows the room, the search, the match and the stands, which the gam
 | `input` | `none` reports no input from the keyboard, mouse or controllers. | The game gets no controller input and the menu cursor stops following the mouse; `input_script` still applies. | Caution |
 | `input_live` | Path of a file a test harness appends lines to while the game runs, read every 50 ms: `[+<ticks>] <button> [hold]` and `[+<ticks>] LSTICK or RSTICK <x> <y> [hold]` as in `input_script` but counted from the moment they are read, and `SHOT <path.png>`, which saves the next presented frame at full size. Works without window focus, so one harness can steer several instances. | The game presses those buttons by itself and writes the pictures asked for; a line still being written waits for its end. | Caution |
 | `input_script` | Path of a file with lines `<frame> <button> [hold]` or `<frame> LSTICK or RSTICK <x> <y> [hold]` that are ORed into the real input. | The game presses those buttons by itself; a file that cannot be opened is logged and ignored. | Caution |
-| `mgyro_bench` | `all` or a comma-separated list of `look idle lin step phase rate rt fields pitchyaw yawaxis reverse cap recenter limits hitch fps image`: the mouse gyro's test bench ([controls.md](controls.md), "Mouse as the gyro"). A simulated mouse turns the virtual controller, the game's aim is read from its memory and every six-axis read goes to a CSV file. | The player's own input is ignored while it runs and the aim turns by itself; `fps` changes the frame limit for a while. | Caution |
+| `mgyro_bench` | `all` or a comma-separated list of `look idle lin step phase rate rt fields pitchyaw yawaxis reverse cap recenter limits hitch fps image circle vsine pokecmp native sweep`: the mouse gyro's test bench ([controls.md](controls.md), "Mouse as the gyro"). A simulated mouse turns the virtual controller, the game's aim is read from its memory and every six-axis read goes to a CSV file. `circle` moves the mouse along circles and `vsine` up and down only, each from a level camera; `sweep` moves the pitch over its whole range in 25-count steps both ways; `native` runs steps, reversals and circles with `mouse_native` off and then on. | The player's own input is ignored while it runs and the aim turns by itself; `fps` changes the frame limit for a while and `native` switches `mouse_native` for a while. | Caution |
+| `mgyro_bench_obj` | Offsets in `main` (hex, comma-separated) of functions whose first argument (x0) is an object the bench watches: the function-entry hook catches it for 30 reads after the bench's start. | Every lifted function checks the list on entry for those reads; only adds CSV lines. | Caution |
+| `mgyro_bench_fields` | `<k>+<hex offset>[*<n>]` entries, comma-separated: n floats of object k of `mgyro_bench_obj` logged after every read as a `W` line. | Only adds CSV columns. | Safe |
+| `mgyro_bench_poke` | `<hex offset>=<hex byte>` entries: bytes of `main`'s data the `pokecmp` test writes for its second half and puts back after, to compare the game with and without a switch of its own. | The game runs with that data changed during the test. | Caution |
 | `mgyro_bench_out` (default `mgyro-bench.csv`) | The bench's CSV file; its screenshots (`image`) go to the folder of the same name with `-shots` added. | Only moves the output. | Safe |
 | `mgyro_bench_delay` (default `40`) | Seconds between the first live six-axis read and the bench's start, for the scene to load. | Only moves the start. | Safe |
 | `mgyro_bench_exit` | `1` closes the game when the bench is done. | The game closes without a save. | Caution |
@@ -279,6 +283,7 @@ These names are code patch sets built into the generated game code (`recomp/patc
 | `fixed_res_patch` (default `0`) | Patch set that holds the game's dynamic resolution at 100 percent (the scene tier). | The resolution code switches this set from `dynamic_res` (on at `0`); a manual value is replaced. | Unknown |
 | `fov_patch` (default `0`) | Patch set that scales the camera's vertical view angle by the field-of-view setting. | The resolution code switches this set itself whenever the field of view is not 100 percent; a manual value is replaced. | Unknown |
 | `mouse_direct_patch` (default `1`) | Patch set of the hooks in the game's camera code behind `mouse_mode = direct` on game 1.4.3. | `0` stops `mouse_mode = direct` from taking effect; other mouse modes are unaffected. | Safe |
+| `mouse_native_patch` (default `1`) | Splatoon 3 11.3.0: patch set of the five hooks in the player camera behind `mouse_native` (`runtime/mouse_native.c`): its yaw damping, its pitch follow, its yaw gain (read for the linear pitch) and its two calls of the pitch curve. Each hook does what the game does unless the mouse is the sensor with `mouse_native` on. | `0` leaves the camera to the game even with `mouse_native` on: the yaw damping, the pitch easing and the pitch curve come back, and only the gyro processor's newest attitude still applies. | Safe |
 | `patch_output` (default `0`) | Patch set that makes the game use the configured output size for its swapchain and display configuration. | The resolution code switches this set whenever the output differs from the base size; a manual value is replaced. | Unknown |
 | `patch_scene` (default `0`) | Patch set that makes the game use the configured scene render size. | The resolution code switches this set from the render size setting; a manual value is replaced. | Unknown |
 
@@ -353,6 +358,7 @@ variables differ.
 | `KLM_MATCH_WAIT` | `SPLAT3_MATCH_WAIT` |
 | `KLM_MENU_CURSOR` | `TOTK_MENU_CURSOR` |
 | `KLM_MENU_CURSOR_LOG` | `TOTK_MENU_CURSOR_LOG` |
+| `KLM_MGYRO_BENCH` | `TOTK_MGYRO_BENCH` |
 | `KLM_MOUSE_SENS` | `TOTK_MOUSE_SENS` |
 | `KLM_MV_CHECK` | `TOTK_MV_CHECK` |
 | `KLM_NET_LOG` | `SPLAT3_NET_LOG` |

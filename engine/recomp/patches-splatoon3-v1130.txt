@@ -1,5 +1,18 @@
-# Code patches for Splatoon 3 11.3.0 (recomp/patches.py, gen.py --target splatoon3-v1130). No patch sets, as for 11.2.0
-# (patches-splatoon3-v1120.txt).
+# Code patches for Splatoon 3 11.3.0 (recomp/patches.py, gen.py --target splatoon3-v1130): one patch set and the spin
+# waits. 11.2.0 has the spin waits only (patches-splatoon3-v1120.txt).
+
+# Native mouse aiming (runtime/mouse_native.c, TOTK_MOUSE_NATIVE): five sites of the player camera's update
+# (main+0x28f4e20) become a bl to a host function that does what the game does unless the mouse is the sensor: the yaw
+# damping (the frame's yaw turn times the damping gain) at patch page +0xf60 (main+0x61f9f60), the pitch follow (the
+# share of the distance to the pitch target moved this frame) at page +0xf50, the yaw turn (gain times rate, where the
+# yaw gain is read) at page +0xf30, and its two calls of the pitch curve (main+0x28fba70, gyro and plain paths) at
+# page +0xf40, which calls the curve itself. The function saves x30 in its prologue and reads it only to return.
+set mouse_native TOTK_MOUSE_NATIVE_PATCH 1
+site mouse_native main 28f6984 1e20098b 94e40d77   # fmul s11, s12, s0 (yaw turn * damping gain)
+site mouse_native main 28f9ae0 1e2209e1 94e4011c   # fmul s1, s15, s2 (pitch follow share)
+site mouse_native main 28f66f8 1e29090c 94e40e0e   # fmul s12, s8, s9 (yaw gain * yaw rate)
+site mouse_native main 28f7560 94001144 94e40a78   # bl pitch curve (gyro path)
+site mouse_native main 28f7660 94001104 94e40a38   # bl pitch curve (plain path)
 
 # Spin waits, from tools/spin_waits.py --exefs <Splatoon 3 11.3.0 exefs> --modules main,sdk: loops that only another
 # thread can end; their back-edges pass rt_spin_gate (runtime/kernel.c), TOTK_SPIN=0 keeps the core. The main lines

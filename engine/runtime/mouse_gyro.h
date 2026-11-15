@@ -44,7 +44,8 @@ void mgyro_rest(MouseGyro *g, double dt, MotionState *out);
 // The yaw counts the state of this read carries: dx and the counts waiting, at most lim either way (the game takes a
 // frame's turn modulo a whole turn), the rest waiting for the next read. The game eases a turn that reverses the last
 // one in over about 10 frames unless the controller was still for 2 of its reads (measured: 54% of a 10-frame leg
-// turned); so a reversal is held for hold reads that report the controller still, and then goes out whole.
+// turned); so a reversal is held for hold reads that report the controller still, and then goes out whole. With
+// mouse_native on (mouse_native.c) the game's easing is off while the mouse is the sensor.
 double mgyro_frame_yaw(MouseGyro *g, double dx, double lim, int hold);
 // Degrees of controller turn per count for a PC game's sensitivity: cm of mouse travel per whole turn of the camera at
 // dpi, the game turning game_gain times the controller. 0 for cm360 or dpi not above 0.

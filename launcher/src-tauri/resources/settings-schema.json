@@ -420,6 +420,25 @@
       }
     },
     {
+      "key": "mouse_native",
+      "section": "mouse",
+      "ini_section": "input",
+      "type": "bool",
+      "default": "1",
+      "label": {
+        "fr": "Visée souris native",
+        "en": "Native mouse aiming",
+        "es": "Puntería nativa con ratón",
+        "ja": "ネイティブマウス照準"
+      },
+      "help": {
+        "fr": "La souris tourne la visée directement, sans le lissage que le jeu applique au gyroscope. 0 revient à l'ancien comportement. Sans effet sur le gyroscope d'une manette.",
+        "en": "The mouse turns the aim directly, without the smoothing the game applies to the gyro. 0 goes back to the older behaviour. A controller's gyro is not affected.",
+        "es": "El ratón gira la puntería directamente, sin el suavizado que el juego aplica al giroscopio. 0 vuelve al comportamiento anterior. No afecta al giroscopio de un mando.",
+        "ja": "マウスの動きがそのまま照準に反映され、ゲームがジャイロにかける補正はかかりません。0で以前の動作に戻ります。コントローラーのジャイロには影響しません。"
+      }
+    },
+    {
       "key": "mouse_gyro_sens",
       "section": "mouse",
       "ini_section": "input",

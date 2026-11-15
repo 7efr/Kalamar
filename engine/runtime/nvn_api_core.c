@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "mgyro_bench.h"
 #include "cfg.h"
 #include "gfx.h"
 #include "host.h"
@@ -662,6 +663,7 @@ NVN_API(nvnQueueSubmitCommands) {
     int n = (int)arg_x(c, 1);
     const uint64_t *h = arg_p(c, 2);
     if (n < 0 || (n && !h)) rt_fatal("nvn: QueueSubmitCommands with %d handles at %p", n, (const void *)h);
+    mgb_mark("submit", c->x[30]);
     NVN_BLOCKING();
     uint64_t no = __atomic_add_fetch(&lod_entered, 1, __ATOMIC_SEQ_CST);
     q->submits++;

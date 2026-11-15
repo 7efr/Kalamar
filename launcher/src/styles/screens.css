@@ -792,3 +792,17 @@ strong.t-alpha, strong.t-bravo, strong.t-charlie, strong.t-delta { color: var(--
 /* First run: the wizard takes the whole window (no rail). */
 .shell-setup { display: block; }
 .shell-setup .main { padding-left: max(var(--sp-6), 6vw); padding-right: max(var(--sp-6), 6vw); }
+
+/* ---- Loadout presets (Locker, gear and weapon tabs) ------------------------------------------------------- */
+.presets { display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-4); padding: var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+.presets-title { font-size: var(--fs-md); font-weight: 750; }
+.presets-save input { flex: 1 1 12rem; min-width: 0; max-width: 20rem; }
+.preset-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: var(--sp-2); max-height: 15rem; overflow-y: auto; }
+.preset { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-1) var(--sp-3); align-items: center; padding: var(--sp-2); border: 1px solid var(--line); border-radius: var(--r-md); }
+.preset-on { border-color: var(--line-strong); }
+.preset-icons { display: flex; gap: 2px; }
+.preset-icon { width: 34px; height: 34px; }
+.preset-name { min-width: 0; display: flex; flex-direction: column; }
+.preset-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-current { font-size: var(--fs-xs); color: var(--text-2); }
+.preset-actions { grid-column: 1 / -1; gap: var(--sp-2); }

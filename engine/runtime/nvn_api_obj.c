@@ -685,6 +685,91 @@ static struct { const win_t *w; uint64_t free_at, acquired, work[LL_FRAMES]; uns
 
 static int low_latency(void) { return !RT_TOTK && cfg_bool("TOTK_LOW_LATENCY"); }
 
+// Late input (TOTK_LATE_INPUT, on by default with the low-latency pacing; off with the frame queue). Splatoon 3 presents
+// from a second thread while its main thread already runs the next frame: that frame reads the controller about 2 ms
+// in and is finished 2 ms later, but the main thread then waits for the acquire, so with the wait in the acquire the
+// input was read a whole period before its frame's present (measured at 60 fps: 16.2 ms). Here the frame's wait is
+// taken at its first nn::hid state read instead (nvn_input_gate, called by ov_input.c): the read comes li.lead before
+// the display slot of the frame it belongs to, the lead being the longest time from that read to the present call of
+// the last 16 frames plus a margin, and the acquire returns at once.
+// Frames are counted on both sides, as the read of frame f + 1 and the present of frame f come within 0.1 ms of each
+// other in either order: gates - presents is 1 between a frame's read and its present, and a read that finds it at 1
+// already belongs to the next frame unless it follows the frame's first read at once (the game reads five controller
+// styles and the sensor in one go). A frame without a state read (a load) finds no gate at its present, and the
+// acquire paces again as above.
+enum { LI_SAME_FRAME_NS = 1000000 };
+static struct {
+    PlatMutex lock;
+    uint64_t gates, presents;      // frames whose first read came, frames presented (while live)
+    uint64_t passed[2];            // when the gate of frame f let its read go, at [f & 1]
+    uint64_t slot, period, lead;   // of the newest present
+    uint64_t work[LL_FRAMES];
+    unsigned n;
+    volatile int32_t live;         // the acquire does not pace
+} li = {.lock = PLAT_MUTEX_INIT};
+
+static int late_input(void) { return low_latency() && cfg_bool("TOTK_LATE_INPUT") && !cfg_bool("TOTK_FRAME_QUEUE"); }
+
+// At a present held to slot.
+static void li_present(uint64_t now, uint64_t slot, uint64_t period) {
+    plat_mutex_lock(&li.lock);
+    int on = late_input() && li.gates > li.presents;
+    if (!on) {
+        li.gates = li.presents = 0;
+        li.passed[0] = li.passed[1] = 0;
+        li.slot = 0;
+        __atomic_store_n(&li.live, 0, __ATOMIC_RELEASE);
+        plat_mutex_unlock(&li.lock);
+        return;
+    }
+    uint64_t passed = li.passed[li.presents & 1];
+    if (!li.slot) {
+        // the first frame with a state read was still paced by the acquire: its time says nothing. Half a period to
+        // start with, replaced by measured frames within LL_FRAMES presents.
+        for (int i = 0; i < LL_FRAMES; i++) li.work[i] = period / 2;
+        li.n = 0;
+    } else if (passed && now >= passed) {
+        uint64_t work = now - passed;
+        li.work[li.n++ % LL_FRAMES] = work < period ? work : period;
+    }
+    uint64_t lead = 0;
+    for (int i = 0; i < LL_FRAMES; i++) if (li.work[i] > lead) lead = li.work[i];
+    lead += LL_MARGIN_NS;
+    li.lead = lead > period ? period : lead;
+    li.slot = slot, li.period = period;
+    li.presents++;
+    if (li.gates > li.presents + 1) li.gates = li.presents + 1;   // never more than one frame ahead
+    __atomic_store_n(&li.live, 1, __ATOMIC_RELEASE);
+    plat_mutex_unlock(&li.lock);
+}
+
+// ov_input.c, before a controller or six-axis state is read: the first read of a frame waits for the frame's gate.
+void nvn_input_gate(void) {
+    if (!ll.w || !late_input()) return;
+    plat_mutex_lock(&li.lock);
+    uint64_t now = kern_now_ns(), ahead = li.gates - li.presents, last = li.passed[(li.gates - 1) & 1];
+    // the frame's later reads: its gate is open (or another thread still waits at it), or this frame is not presented
+    // yet and the gate opened a moment ago
+    if (ahead > 1 || (li.gates && (!last || (ahead == 1 && now - last < LI_SAME_FRAME_NS)))) {
+        plat_mutex_unlock(&li.lock);
+        return;
+    }
+    uint64_t f = li.gates++;
+    li.passed[f & 1] = 0;
+    // the slot of frame f: one period after the newest present's for each frame from that one on
+    uint64_t at = li.slot ? li.slot + (f - li.presents + 1) * li.period - li.lead : 0;
+    plat_mutex_unlock(&li.lock);
+    if (at > now && at - now < 100000000ull) {
+        uint64_t p0 = perf_begin();
+        sleep_until(at);
+        perf_end(PERF_PACE, p0);
+        now = kern_now_ns();
+    }
+    plat_mutex_lock(&li.lock);
+    if (li.gates == f + 1) li.passed[f & 1] = now;
+    plat_mutex_unlock(&li.lock);
+}
+
 // After a present held to slot: when the next acquire returns.
 static void ll_present(const win_t *o, uint64_t now, uint64_t slot, uint64_t period) {
     if (ll.w != o) memset(&ll, 0, sizeof ll), ll.w = o;
@@ -699,6 +784,7 @@ static void ll_present(const win_t *o, uint64_t now, uint64_t slot, uint64_t per
     if (lead > period) lead = period;
     // the frame queue lets the game run one more period ahead
     ll.free_at = slot + period - lead - (cfg_bool("TOTK_FRAME_QUEUE") ? period : 0);
+    li_present(now, slot, period);
 }
 
 // NVNwindowAcquireTextureResult nvnWindowAcquireTexture(NVNwindow *w, NVNsync *s, int *index): blocks here, not in the
@@ -715,14 +801,17 @@ NVN_API(nvnWindowAcquireTexture) {
     NVN_BLOCKING();
     int idx = o->active ? o->next++ % o->active : 0;
     *out = idx;
+    mgb_mark("acquire", c->x[30]);
     int low = low_latency();
     uint64_t at = low && ll.w == o ? ll.free_at : idx < 4 ? o->avail[idx] : 0;
+    if (low && ll.w == o && __atomic_load_n(&li.live, __ATOMIC_ACQUIRE)) at = 0;   // the frame waits at its input read
     if (at) {
         uint64_t p0 = perf_begin();
         sleep_until(at);
         perf_end(PERF_PACE, p0);
     }
     if (low && (ll.w == o || !ll.w)) ll.w = o, ll.acquired = kern_now_ns();
+    mgb_mark("acquired", 0);
     // The sync means "the display no longer reads this image". Presents are copies queued in submit order, so it is
     // already satisfied: fenced = 3 with fence 0.
     if (s) {
@@ -740,6 +829,7 @@ NVN_API(nvnWindowAcquireTexture) {
 NVN_API(nvnQueuePresentTexture) {
     win_t *o = arg_p(c, 1);
     int idx = (int)arg_x(c, 2);
+    mgb_mark("present", c->x[30]);
     movie_tick(c);   // ov_movie.c: hand over decoded movie frames that are due; needs the core, so before the wait
     res_present(c);  // resolution.c: a DLSS mode change sets the game's render size again, between frames
     NVN_BLOCKING();
